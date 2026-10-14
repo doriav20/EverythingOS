@@ -8,6 +8,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+adw = { package = "libadwaita", version = "0.8", features = ["v1_5"] }
 async-channel = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 evos-proto.workspace = true

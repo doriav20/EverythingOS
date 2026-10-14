@@ -487,6 +487,11 @@ impl Ui {
                 ui.entry.grab_focus();
             }),
         );
+        let preferences = gio::SimpleAction::new("preferences", None);
+        let ui = self.clone();
+        preferences.connect_activate(move |_, _| crate::prefs::show(&ui.window, &ui.backend));
+        app.add_action(&preferences);
+        app.set_accels_for_action("app.preferences", &["<Ctrl>comma"]);
         app.set_accels_for_action("win.focus-search", &["<Ctrl>f", "<Ctrl>l"]);
         app.set_accels_for_action("win.copy-path", &["<Ctrl><Shift>c"]);
         app.set_accels_for_action("win.open-folder", &["<Ctrl>Return"]);

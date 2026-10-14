@@ -28,7 +28,40 @@ services:
     <<: *dev
     profiles: ["dev"]
 
+  # --- end-to-end tests: docker compose --profile test run --rm e2e ---
+  samba:
+    build: docker/samba
+    profiles: ["test"]
+    volumes:
+      - testdata:/data
+    command: ["sh", "-c", "mkdir -p /data/smb && exec smbd --foreground --no-process-group --debug-stdout"]
+
+  nfs:
+    build: docker/nfs
+    profiles: ["test"]
+    # The VFS backend uses file handles (open_by_handle_at).
+    privileged: true
+    volumes:
+      - testdata:/data
+    command: ["sh", "-c", "mkdir -p /data/nfs && exec ganesha.nfsd -F -L /dev/stdout -f /etc/ganesha/ganesha.conf"]
+
+  e2e:
+    <<: *dev
+    profiles: ["test"]
+    depends_on: [samba, nfs]
+    volumes:
+      - .:/work
+      - target:/target
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - testdata:/server
+    environment:
+      E2E_FILES: ${E2E_FILES:-100000}
+      E2E_DIRS: ${E2E_DIRS:-5000}
+    command: ["bash", "tests/e2e/run.sh"]
+
 volumes:
   target:
   cargo-registry:
   cargo-git:
+  testdata:

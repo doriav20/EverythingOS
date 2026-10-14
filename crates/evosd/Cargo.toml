@@ -52,3 +52,25 @@ assets = [
     ["../../README.md", "usr/share/doc/evos/README.md", "644"],
 ]
 
+[package.metadata.generate-rpm]
+name = "evos"
+# Explicit sonames: automatic scanning records the build host's libraries.
+auto-req = "no"
+summary = "Instant file search for Linux, including network shares"
+license = "MIT"
+assets = [
+    { source = "target/release/evosd", dest = "/usr/bin/evosd", mode = "755" },
+    { source = "target/release/evos", dest = "/usr/bin/evos", mode = "755" },
+    { source = "../../packaging/systemd/evosd.service", dest = "/usr/lib/systemd/system/evosd.service", mode = "644" },
+    { source = "../../packaging/polkit/org.evos.policy", dest = "/usr/share/polkit-1/actions/org.evos.policy", mode = "644" },
+    { source = "../../packaging/config/evosd.toml", dest = "/etc/evos/evosd.toml", mode = "644", config = "noreplace" },
+    { source = "../../README.md", dest = "/usr/share/doc/evos/README.md", mode = "644", doc = true },
+]
+post_install_script = "if [ -d /run/systemd/system ]; then systemctl daemon-reload; systemctl enable evosd.service; systemctl restart evosd.service; fi || true"
+pre_uninstall_script = "if [ $1 -eq 0 ] && [ -d /run/systemd/system ]; then systemctl disable --now evosd.service; fi || true"
+post_uninstall_script = "if [ -d /run/systemd/system ]; then systemctl daemon-reload; fi || true"
+
+[package.metadata.generate-rpm.requires]
+"libc.so.6()(64bit)" = "*"
+cifs-utils = "*"
+nfs-utils = "*"

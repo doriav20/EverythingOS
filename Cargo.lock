@@ -664,6 +664,7 @@ dependencies = [
  "evos-mount",
  "evos-proto",
  "evos-scan",
+ "libc",
  "parking_lot",
  "sd-notify",
  "serde",

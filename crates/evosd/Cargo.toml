@@ -13,6 +13,7 @@ evos-core.workspace = true
 evos-mount.workspace = true
 evos-proto.workspace = true
 evos-scan.workspace = true
+libc = "0.2"
 parking_lot = "0.12"
 sd-notify = "0.4"
 serde.workspace = true

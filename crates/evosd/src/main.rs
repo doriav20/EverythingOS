@@ -20,10 +20,34 @@ struct Args {
     /// Log filter, e.g. `info` or `evosd=debug,evos_scan=debug`.
     #[arg(long, env = "EVOS_LOG", default_value = "info")]
     log: String,
+    /// Join the mount namespace of PID 1 before starting. Lets a
+    /// container started with `pid: host` index and mount on the host
+    /// with the host's real paths.
+    #[arg(long)]
+    host_mount_namespace: bool,
+}
+
+/// Moves this (still single-threaded) process into the host's mount
+/// namespace.
+fn enter_host_mount_namespace() -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+    let ns = std::fs::File::open("/proc/1/ns/mnt")?;
+    // SAFETY: plain syscall on a valid namespace fd; no other threads exist
+    // yet, as setns(CLONE_NEWNS) requires.
+    if unsafe { libc::setns(ns.as_raw_fd(), libc::CLONE_NEWNS) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    std::env::set_current_dir("/")
 }
 
 fn main() -> ExitCode {
     let args = Args::parse();
+    if args.host_mount_namespace {
+        if let Err(e) = enter_host_mount_namespace() {
+            eprintln!("evosd: cannot join the host mount namespace: {e}");
+            return ExitCode::FAILURE;
+        }
+    }
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::new(&args.log))
         .with_target(false)

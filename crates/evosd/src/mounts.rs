@@ -8,14 +8,29 @@ use std::sync::Arc;
 use evos_mount::MountError;
 use evos_proto::{ErrorCode, Event, Request, Response};
 
+use crate::auth;
 use crate::server::{blocking, Daemon, Peer};
 
-/// Is the peer allowed to change mounts?
+/// Is the peer allowed to change mounts? Root always is; others need the
+/// polkit action, usually an administrator password via their agent.
 async fn authorize(peer: &Peer) -> Result<(), String> {
     if peer.caller.is_root() {
         return Ok(());
     }
-    Err("managing mounts requires root".into())
+    let Some(pid) = peer.pid else {
+        return Err("cannot identify the calling process".into());
+    };
+    match auth::polkit_authorized(pid, peer.caller.uid, auth::MANAGE_MOUNTS).await {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(
+            "not authorized to manage mounts (run with sudo, or from a desktop \
+                          session with a polkit agent)"
+                .into(),
+        ),
+        Err(e) => Err(format!(
+            "cannot check authorization: {e}; run with sudo instead"
+        )),
+    }
 }
 
 fn error_response(e: MountError) -> Response {

@@ -2,7 +2,7 @@
 //!
 //! Directories are opened with `O_NOFOLLOW` and their entries are stat'ed
 //! relative to the directory fd with `statx`, which avoids repeated path
-//! resolution. The [`Sync`] mode controls attribute caching on network
+//! resolution. The [`CacheMode`] controls attribute caching on network
 //! filesystems: listings use cached attributes the READDIR(PLUS) reply just
 //! populated, while change sweeps force a round trip to the server.
 
@@ -20,22 +20,22 @@ const ATTR_MOUNT_ROOT: u64 = 0x2000;
 
 /// How `statx` may use cached attributes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Sync {
+pub enum CacheMode {
     /// Whatever `stat(2)` would do.
     #[default]
     AsStat,
     /// Never contact the server; use cached attributes if present.
-    DontSync,
+    Cached,
     /// Always revalidate with the server.
-    Force,
+    Revalidate,
 }
 
-impl Sync {
+impl CacheMode {
     fn flags(self) -> AtFlags {
         match self {
-            Sync::AsStat => AtFlags::empty(),
-            Sync::DontSync => AtFlags::STATX_DONT_SYNC,
-            Sync::Force => AtFlags::STATX_FORCE_SYNC,
+            CacheMode::AsStat => AtFlags::empty(),
+            CacheMode::Cached => AtFlags::STATX_DONT_SYNC,
+            CacheMode::Revalidate => AtFlags::STATX_FORCE_SYNC,
         }
     }
 }
@@ -82,11 +82,11 @@ fn open_dir(path: &[u8]) -> io::Result<OwnedFd> {
 }
 
 /// Stats a path without following a final symlink.
-pub fn stat(path: &[u8], sync: Sync) -> io::Result<Meta> {
+pub fn stat(path: &[u8], cache: CacheMode) -> io::Result<Meta> {
     let st = rustix::fs::statx(
         CWD,
         os_path(path),
-        AtFlags::SYMLINK_NOFOLLOW | sync.flags(),
+        AtFlags::SYMLINK_NOFOLLOW | cache.flags(),
         MASK,
     )?;
     Ok(meta_of(&st))
@@ -95,9 +95,9 @@ pub fn stat(path: &[u8], sync: Sync) -> io::Result<Meta> {
 /// Lists a directory and stats every entry.
 ///
 /// Entries that vanish between `getdents` and `statx` are skipped.
-pub fn list_dir(path: &[u8], sync: Sync) -> io::Result<Listing> {
+pub fn list_dir(path: &[u8], cache: CacheMode) -> io::Result<Listing> {
     let fd = open_dir(path)?;
-    let dir_stat = rustix::fs::statx(&fd, "", AtFlags::EMPTY_PATH | sync.flags(), MASK)?;
+    let dir_stat = rustix::fs::statx(&fd, "", AtFlags::EMPTY_PATH | cache.flags(), MASK)?;
     let dir_dev = (dir_stat.stx_dev_major, dir_stat.stx_dev_minor);
     let mut listing = Listing {
         dir: meta_of(&dir_stat),
@@ -114,7 +114,7 @@ pub fn list_dir(path: &[u8], sync: Sync) -> io::Result<Listing> {
         let st = match rustix::fs::statx(
             &fd,
             entry.file_name(),
-            AtFlags::SYMLINK_NOFOLLOW | sync.flags(),
+            AtFlags::SYMLINK_NOFOLLOW | cache.flags(),
             MASK,
         ) {
             Ok(st) => st,
@@ -190,7 +190,7 @@ mod tests {
         symlink("a.txt", tmp.path().join("link")).unwrap();
         fs::set_permissions(tmp.path().join("a.txt"), fs::Permissions::from_mode(0o640)).unwrap();
 
-        let listing = list_dir(&bytes(tmp.path()), Sync::AsStat).unwrap();
+        let listing = list_dir(&bytes(tmp.path()), CacheMode::AsStat).unwrap();
         assert!(listing.dir.is_dir());
         let mut names: Vec<_> = listing.entries.iter().map(|e| e.name.clone()).collect();
         names.sort();
@@ -216,9 +216,9 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         fs::create_dir(tmp.path().join("real")).unwrap();
         symlink("real", tmp.path().join("alias")).unwrap();
-        assert!(list_dir(&bytes(&tmp.path().join("alias")), Sync::AsStat).is_err());
+        assert!(list_dir(&bytes(&tmp.path().join("alias")), CacheMode::AsStat).is_err());
         assert!(
-            stat(&bytes(&tmp.path().join("alias")), Sync::Force)
+            stat(&bytes(&tmp.path().join("alias")), CacheMode::Revalidate)
                 .unwrap()
                 .mode
                 & 0o170000
@@ -229,7 +229,7 @@ mod tests {
     #[test]
     fn detects_mount_points() {
         // /proc is always a separate mount below /.
-        let listing = list_dir(b"/", Sync::AsStat).unwrap();
+        let listing = list_dir(b"/", CacheMode::AsStat).unwrap();
         assert!(listing.mount_points.iter().any(|n| n == b"proc"));
     }
 

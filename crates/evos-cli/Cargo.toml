@@ -12,4 +12,9 @@ name = "evos"
 path = "src/main.rs"
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+clap = { version = "4", features = ["derive", "env"] }
 evos-proto.workspace = true
+rpassword = "7"
+serde.workspace = true
+serde_json = "1"

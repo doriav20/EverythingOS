@@ -15,7 +15,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use crossbeam_channel::{unbounded, Receiver};
+use crossbeam_channel::{unbounded, Receiver, TryRecvError};
 use evos_core::{EntryId, Index, ROOT};
 
 use crate::changes::nearest_ancestor;
@@ -75,6 +75,9 @@ fn share_available(root: &[u8], require_mount: bool) -> bool {
     fsops::stat_info(parent, CacheMode::Cached).is_ok_and(|p| p.dev != info.dev)
 }
 
+/// Delay before restarting SMB notifications after they stopped.
+const NOTIFY_RETRY: Duration = Duration::from_secs(30);
+
 fn is_cifs(fs_type: &str) -> bool {
     matches!(fs_type, "cifs" | "smb3")
 }
@@ -90,6 +93,8 @@ fn spawn_notifier(vol: Arc<Volume>) -> Option<Receiver<Notice>> {
             return None;
         }
     };
+    // Assume detailed notifications until the first request says otherwise.
+    vol.update_status(|s| s.watch = WatchMode::SmbNotify { details: true });
     let (tx, rx) = unbounded();
     std::thread::Builder::new()
         .name("evos-smb-notify".into())
@@ -165,10 +170,12 @@ pub fn run_network(vol: &Arc<Volume>, opts: &NetworkOptions) {
     };
     let cancel = vol.stop_flag();
     let mut sched = Scheduler::new(opts.schedule.clone());
-    let notices = (opts.smb_notify && is_cifs(vol.fs_type()))
-        .then(|| spawn_notifier(vol.clone()))
-        .flatten();
+    let wants_notify = opts.smb_notify && is_cifs(vol.fs_type());
     vol.update_status(|s| s.watch = WatchMode::Sweeps);
+    let mut notices: Option<Receiver<Notice>> = None;
+    // When to (re)start the notification thread; it ends when the share
+    // becomes unreachable and must be restarted once it is back.
+    let mut notify_at = wants_notify.then(Instant::now);
     let mut offline = false;
 
     let go_offline = |offline: &mut bool| {
@@ -235,16 +242,31 @@ pub fn run_network(vol: &Arc<Volume>, opts: &NetworkOptions) {
             vol.update_status(|s| s.phase = Phase::Live);
         }
 
+        if notices.is_none() && notify_at.is_some_and(|t| now >= t) {
+            notices = spawn_notifier(vol.clone());
+            notify_at = notices.is_none().then(|| now + NOTIFY_RETRY);
+        }
+
         // SMB notifications: re-list exactly what the server reported.
         let mut relist = Vec::new();
-        for notice in notices.iter().flat_map(|rx| rx.try_iter()) {
-            match notice {
-                Notice::Changed(changes) => {
+        let mut notifier_ended = false;
+        while let Some(rx) = &notices {
+            match rx.try_recv() {
+                Ok(Notice::Changed(changes)) => {
                     let paths: Vec<Vec<u8>> = changes.into_iter().map(|(_, p)| p).collect();
                     relist.extend(dirs_for_paths(&vol.index.read(), &paths));
                 }
-                Notice::Unspecified => sched.boost_hot(2, now),
+                Ok(Notice::Unspecified) => sched.boost_hot(2, now),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    notifier_ended = true;
+                    break;
+                }
             }
+        }
+        if notifier_ended {
+            notices = None;
+            notify_at = Some(now + NOTIFY_RETRY);
         }
         for path in vol.take_hints() {
             if let Some(dir) = dir_for_hint(&vol.index.read(), &path) {

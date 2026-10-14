@@ -24,3 +24,31 @@ zbus = { version = "5", default-features = false, features = ["tokio"] }
 
 [dev-dependencies]
 tempfile = "3"
+
+# Package `evos`: daemon, command-line client, service and policy files.
+# Built by scripts/package.sh after a release build of the workspace.
+[package.metadata.deb]
+name = "evos"
+maintainer = "doriav <doriav20@gmail.com>"
+copyright = "2026, doriav"
+license-file = ["../../LICENSE", "0"]
+extended-description = """\
+EverythingOS indexes every local filesystem and network share and finds \
+files by name instantly, like Everything on Windows. Local disks are \
+followed live through fanotify; SMB, NFS and SSHFS shares are mounted on \
+request and kept fresh with change notifications and adaptive sweeps."""
+section = "utils"
+priority = "optional"
+depends = "$auto, cifs-utils, nfs-common"
+recommends = "sshfs, polkitd"
+conf-files = ["/etc/evos/evosd.toml"]
+maintainer-scripts = "../../packaging/debian/evos"
+assets = [
+    ["target/release/evosd", "usr/bin/", "755"],
+    ["target/release/evos", "usr/bin/", "755"],
+    ["../../packaging/systemd/evosd.service", "usr/lib/systemd/system/", "644"],
+    ["../../packaging/polkit/org.evos.policy", "usr/share/polkit-1/actions/", "644"],
+    ["../../packaging/config/evosd.toml", "etc/evos/evosd.toml", "644"],
+    ["../../README.md", "usr/share/doc/evos/README.md", "644"],
+]
+

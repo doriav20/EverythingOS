@@ -1,0 +1,12 @@
+#!/bin/sh
+set -e
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+if [ "$1" = "purge" ]; then
+    # Index snapshots and runtime files; mounts.d and credentials in
+    # /etc/evos are user data and are removed with the conffiles.
+    rm -rf /var/lib/evos /run/evos
+    rm -rf /etc/evos/mounts.d /etc/evos/credentials
+fi
+exit 0

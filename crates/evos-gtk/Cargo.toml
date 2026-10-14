@@ -13,3 +13,20 @@ async-channel = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 evos-proto.workspace = true
 gtk = { package = "gtk4", version = "0.10", features = ["v4_14"] }
+
+# Package `evos-gtk`: the desktop client.
+[package.metadata.deb]
+name = "evos-gtk"
+maintainer = "doriav <doriav20@gmail.com>"
+copyright = "2026, doriav"
+license-file = ["../../LICENSE", "0"]
+extended-description = "Desktop search window for EverythingOS, the instant file search for Linux."
+section = "utils"
+priority = "optional"
+depends = "$auto, evos"
+assets = [
+    ["target/release/evos-gtk", "usr/bin/", "755"],
+    ["../../packaging/desktop/org.evos.Search.desktop", "usr/share/applications/", "644"],
+    ["../../packaging/icons/org.evos.Search.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+]
+

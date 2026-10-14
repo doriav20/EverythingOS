@@ -1,0 +1,14 @@
+# Build output
+/target/
+/dist/
+
+# Index snapshots produced during local runs
+*.idx
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db

@@ -1,0 +1,7 @@
+# Normalize to LF everywhere: sources are edited on Windows but built and
+# executed inside Linux containers, where CRLF breaks shell scripts.
+* text=auto eol=lf
+
+*.png binary
+*.ico binary
+*.idx binary

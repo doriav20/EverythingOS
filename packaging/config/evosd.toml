@@ -1,0 +1,40 @@
+# EverythingOS daemon configuration.
+# Every setting is optional; the values below are the defaults.
+
+# state_dir = "/var/lib/evos"          # index snapshots
+# config_dir = "/etc/evos"             # mounts.d/ and credentials/
+# run_dir = "/run/evos"
+# socket = "/run/evos/evosd.sock"
+# snapshot_interval_secs = 300
+
+# Return every result to every user instead of filtering by permissions.
+# Only for single-user machines.
+# single_user = false
+
+[local]
+# Paths that are never indexed (with everything below them).
+# exclude = ["/proc", "/sys", "/dev", "/run", "/var/lib/docker", "/var/lib/containers"]
+# Mount points not to index at all.
+# skip_mounts = []
+# index_tmpfs = false
+# Use fanotify filesystem-wide watches (falls back to inotify).
+# fanotify = true
+# Full re-check of each local volume, as a safety net.
+# safety_sweep_hours = 24
+# threads = 16
+
+[network]
+# Also index network mounts that EverythingOS did not mount itself.
+# index_unmanaged = true
+# Upper bound for parallel requests per share; the actual level adapts.
+# max_concurrency = 64
+# Cap on operations per second per share (0 = unlimited).
+# max_ops_per_sec = 0
+# Folders that just changed are re-checked this often...
+# min_recheck_secs = 30
+# ...and no folder goes unchecked longer than this.
+# max_staleness_hours = 24
+# Full metadata refresh of each folder.
+# refresh_days = 7
+# smb_notify = true
+# offline_retry_secs = 30

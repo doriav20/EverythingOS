@@ -3,6 +3,7 @@
 
 pub mod auth;
 pub mod config;
+pub mod daemon;
 pub mod mounts;
 pub mod server;
 pub mod volumes;

@@ -6,6 +6,7 @@ pub mod changes;
 pub mod fanotify;
 pub mod fsops;
 pub mod inotify;
+pub mod local;
 pub mod mountinfo;
 pub mod schedule;
 pub mod smbnotify;

@@ -80,11 +80,13 @@ pub fn run(cfg: Config) -> Result<(), String> {
 
     tracing::info!("shutting down");
     let _ = sd_notify::notify(false, &[sd_notify::NotifyState::Stopping]);
+    // Join the background threads first so none of them re-attaches a
+    // volume while the others are being saved.
     stop.store(true, Ordering::Relaxed);
-    volumes.shutdown();
     for t in threads {
         let _ = t.join();
     }
+    volumes.shutdown();
     let _ = std::fs::remove_file(&cfg.socket);
     runtime.shutdown_timeout(Duration::from_secs(2));
     result

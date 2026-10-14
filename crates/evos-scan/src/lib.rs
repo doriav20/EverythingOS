@@ -11,4 +11,5 @@ pub mod schedule;
 pub mod smbnotify;
 pub mod sweep;
 pub mod throttle;
+pub mod volume;
 pub mod walker;

@@ -8,4 +8,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+async-channel = "2"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 evos-proto.workspace = true
+gtk = { package = "gtk4", version = "0.10", features = ["v4_14"] }

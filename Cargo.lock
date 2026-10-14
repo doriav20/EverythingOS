@@ -454,6 +454,8 @@ dependencies = [
  "evos-mount",
  "evos-proto",
  "evos-scan",
+ "serde",
+ "toml",
 ]
 
 [[package]]

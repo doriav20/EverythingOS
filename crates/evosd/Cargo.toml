@@ -9,6 +9,8 @@ authors.workspace = true
 
 [dependencies]
 evos-core.workspace = true
-evos-scan.workspace = true
 evos-mount.workspace = true
 evos-proto.workspace = true
+evos-scan.workspace = true
+serde.workspace = true
+toml = "0.8"

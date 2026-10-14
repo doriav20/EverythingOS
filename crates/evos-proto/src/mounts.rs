@@ -66,10 +66,10 @@ pub struct MountSpec {
     pub kind: MountKind,
     pub source: String,
     /// Defaults to `/mnt/evos/<name>`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub mountpoint: Option<String>,
     /// Extra `-o` options for mount.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub options: Vec<String>,
     /// Mount at daemon start and remount after failures.
     #[serde(default = "yes")]
@@ -190,6 +190,14 @@ mod tests {
         s.options = vec!["vers=3.0,sec=none".into()];
         assert!(s.validate().is_err(), "options are passed one by one");
         assert_eq!(spec(MountKind::Nfs, "a:/b").mountpoint(), "/mnt/evos/nas");
+    }
+
+    #[test]
+    fn specs_survive_the_wire_format() {
+        // postcard is not self-describing: every field must be serialized.
+        let s = spec(MountKind::Nfs, "nas:/export");
+        let bytes = postcard::to_allocvec(&s).unwrap();
+        assert_eq!(postcard::from_bytes::<MountSpec>(&bytes).unwrap(), s);
     }
 
     #[test]

@@ -411,6 +411,9 @@ dependencies = [
 [[package]]
 name = "evos-mount"
 version = "0.1.0"
+dependencies = [
+ "evos-proto",
+]
 
 [[package]]
 name = "evos-proto"

@@ -370,6 +370,7 @@ name = "evos-scan"
 version = "0.1.0"
 dependencies = [
  "evos-core",
+ "rustix",
 ]
 
 [[package]]

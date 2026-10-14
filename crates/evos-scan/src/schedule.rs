@@ -145,6 +145,24 @@ impl Scheduler {
         }
     }
 
+    /// Moves every recently changed folder (at most `max_streak` unchanged
+    /// checks since its last change) to the front of the queue. Used when
+    /// the server says something changed without saying where.
+    pub fn boost_hot(&mut self, max_streak: u8, now: Instant) {
+        let hot: Vec<EntryId> = self
+            .slots
+            .iter()
+            .filter(|(_, s)| s.streak <= max_streak && s.due > now)
+            .map(|(&id, _)| id)
+            .collect();
+        for id in hot {
+            if let Some(mut slot) = self.slots.get(&id).copied() {
+                slot.due = now;
+                self.set(id, slot);
+            }
+        }
+    }
+
     /// Does this folder need a full re-list to refresh file metadata?
     pub fn needs_refresh(&self, id: EntryId, now: Instant) -> bool {
         self.slots
@@ -270,6 +288,23 @@ mod tests {
         let later = now + Duration::from_secs(60);
         assert_eq!(s.pop_due(later, 4).len(), 4, "budget limits a batch");
         assert_eq!(s.pop_due(later, 100).len(), 5);
+    }
+
+    #[test]
+    fn boost_hot_only_moves_recently_changed_folders() {
+        let now = Instant::now();
+        let mut s = Scheduler::new(cfg());
+        s.track_all([1, 2], now);
+        let mut t = now;
+        for _ in 0..5 {
+            // Jump past every due time; 1 keeps changing, 2 never does.
+            t += Duration::from_secs(100_000);
+            for id in s.pop_due(t, 10) {
+                s.record(id, id == 1, t);
+            }
+        }
+        s.boost_hot(2, t);
+        assert_eq!(s.pop_due(t, 10), vec![1]);
     }
 
     #[test]

@@ -157,7 +157,7 @@ fn entry(ix: &mut Index, dir: &[u8], name: &[u8], seen: &Observed, report: &mut 
     }
 }
 
-fn nearest_ancestor(ix: &Index, path: &[u8]) -> Option<EntryId> {
+pub(crate) fn nearest_ancestor(ix: &Index, path: &[u8]) -> Option<EntryId> {
     let mut p = path;
     loop {
         if let Some(id) = ix.resolve(p).filter(|&id| ix.is_dir(id)) {

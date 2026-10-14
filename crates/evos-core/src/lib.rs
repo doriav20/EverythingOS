@@ -4,6 +4,7 @@
 
 pub mod fold;
 pub mod perm;
+pub mod persist;
 pub mod query;
 pub mod search;
 pub mod sort;

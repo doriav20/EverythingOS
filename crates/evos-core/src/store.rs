@@ -121,10 +121,10 @@ pub struct Index {
 
     lookup: HashTable<EntryId>,
     hasher: DefaultHashBuilder,
-    live: usize,
-    garbage_bytes: usize,
-    generation: u64,
-    epoch: u64,
+    pub(crate) live: usize,
+    pub(crate) garbage_bytes: usize,
+    pub(crate) generation: u64,
+    pub(crate) epoch: u64,
 }
 
 impl Index {

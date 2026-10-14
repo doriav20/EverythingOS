@@ -1,0 +1,5 @@
+# Packaging tools on top of the development image (Ubuntu 24.04, so the
+# packages run on Ubuntu 24.04+, Debian 13 and Fedora 40+).
+FROM evos-dev:latest
+RUN cargo install --locked cargo-deb cargo-generate-rpm \
+    && rm -rf /usr/local/cargo/registry

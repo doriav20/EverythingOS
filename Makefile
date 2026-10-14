@@ -13,6 +13,7 @@ help:
 	@echo "  fmt     format the workspace"
 	@echo "  shell   interactive shell in the dev container"
 	@echo "  e2e     end-to-end tests against Samba and NFS servers"
+	@echo "  package build .deb, .rpm and .tar.gz packages into dist/"
 
 image:
 	$(COMPOSE) build dev
@@ -38,3 +39,13 @@ e2e:
 	$(COMPOSE) --profile test build samba nfs
 	$(COMPOSE) --profile test run --rm e2e
 	$(COMPOSE) --profile test down
+
+.PHONY: package deb rpm tarball
+# Packages for Debian/Ubuntu, Fedora/openSUSE and a generic tarball, in dist/.
+package: image
+	$(COMPOSE) --profile package build package
+	$(COMPOSE) --profile package run --rm package all
+
+deb rpm tarball: image
+	$(COMPOSE) --profile package build package
+	$(COMPOSE) --profile package run --rm package $@

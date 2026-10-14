@@ -28,6 +28,19 @@ services:
     <<: *dev
     profiles: ["dev"]
 
+  # --- packages: docker compose --profile package run --rm package [deb|rpm|tarball] ---
+  package:
+    <<: *dev
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.package
+    image: evos-package:latest
+    profiles: ["package"]
+    environment:
+      DIST: /work/dist
+    entrypoint: ["scripts/package.sh"]
+    command: ["all"]
+
   # --- end-to-end tests: docker compose --profile test run --rm e2e ---
   samba:
     build: docker/samba

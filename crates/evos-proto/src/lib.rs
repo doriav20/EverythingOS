@@ -1,13 +1,16 @@
-//! Wire protocol between the EverythingOS daemon and its clients.
+//! Wire protocol between the EverythingOS daemon and its clients, plus a
+//! small blocking client.
 //!
 //! Messages are postcard-encoded and framed with a little-endian `u32`
 //! length over a Unix stream socket. Every request carries an id that the
 //! matching response repeats; pushed events use id 0.
 
+mod client;
 mod mounts;
 
 use serde::{Deserialize, Serialize};
 
+pub use client::{Client, ClientError};
 pub use mounts::{Credentials, IndexSettings, MountInfo, MountKind, MountSpec};
 
 /// Bumped on incompatible protocol changes.

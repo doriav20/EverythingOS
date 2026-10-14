@@ -9,8 +9,12 @@ authors.workspace = true
 
 [dependencies]
 evos-proto.workspace = true
+evos-scan.workspace = true
+parking_lot = "0.12"
+thiserror.workspace = true
 toml = "0.8"
 tracing.workspace = true
 
 [dev-dependencies]
+rustix = { version = "1", features = ["process"] }
 tempfile = "3"

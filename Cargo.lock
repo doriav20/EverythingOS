@@ -413,7 +413,11 @@ name = "evos-mount"
 version = "0.1.0"
 dependencies = [
  "evos-proto",
+ "evos-scan",
+ "parking_lot",
+ "rustix",
  "tempfile",
+ "thiserror",
  "toml",
  "tracing",
 ]

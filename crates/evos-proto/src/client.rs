@@ -76,8 +76,14 @@ impl Client {
                     body => Ok(body),
                 };
             }
-            if let Response::Event(e) = msg.body {
-                self.events.push_back(e);
+            match msg.body {
+                Response::Event(e) => self.events.push_back(e),
+                // The server could not even decode our request, so it
+                // cannot answer with our id; fail instead of waiting.
+                Response::Error { code, message } if msg.id == 0 => {
+                    return Err(ClientError::Server { code, message })
+                }
+                _ => {}
             }
         }
     }
@@ -195,7 +201,8 @@ mod tests {
                 s.read_exact(&mut body).unwrap();
                 let req: Envelope<Request> = decode_body(&body).unwrap();
                 for resp in handler(req.body) {
-                    let id = if matches!(resp, Response::Event(_)) {
+                    let connection_level = matches!(&resp, Response::Error { message, .. } if message == "undecodable");
+                    let id = if matches!(resp, Response::Event(_)) || connection_level {
                         0
                     } else {
                         req.id
@@ -254,6 +261,31 @@ mod tests {
             }
         ));
         c.release(3).unwrap();
+    }
+
+    #[test]
+    fn connection_level_errors_fail_the_call() {
+        let dir = serve(|req| match req {
+            Request::Hello { .. } => {
+                vec![Response::Hello {
+                    server: "t".into(),
+                    protocol: PROTOCOL_VERSION,
+                }]
+            }
+            _ => vec![Response::Error {
+                code: ErrorCode::BadRequest,
+                message: "undecodable".into(),
+            }],
+        });
+        let mut c = Client::connect(dir.path().join("s"), "t").unwrap();
+        let err = c.status().unwrap_err();
+        assert!(matches!(
+            err,
+            ClientError::Server {
+                code: ErrorCode::BadRequest,
+                ..
+            }
+        ));
     }
 
     #[test]

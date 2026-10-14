@@ -1,0 +1,28 @@
+# Development / CI / packaging image.
+#
+# Based on Ubuntu 24.04 on purpose: binaries built here link against glibc
+# 2.39 and GTK 4.14 / libadwaita 1.5, so the resulting packages also run on
+# Ubuntu 24.04+, Debian 13 and Fedora 40+. Newer GTK APIs are kept out by the
+# gtk4/libadwaita feature flags in Cargo.toml.
+FROM ubuntu:24.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates curl build-essential pkg-config git \
+        libgtk-4-dev libadwaita-1-dev \
+        cifs-utils nfs-common sshfs smbclient \
+        iproute2 procps psmisc sudo \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH
+RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal \
+        --default-toolchain stable --component rustfmt,clippy \
+    && chmod -R a+w $RUSTUP_HOME $CARGO_HOME
+
+ENV CARGO_TARGET_DIR=/target \
+    CARGO_TERM_COLOR=always
+
+WORKDIR /work

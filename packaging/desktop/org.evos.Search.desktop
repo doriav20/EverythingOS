@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Name=EverythingOS
+GenericName=File Search
+Comment=Find files instantly on every disk and network share
+Icon=org.evos.Search
+Exec=evos-gtk
+Terminal=false
+Categories=Utility;FileTools;GTK;
+Keywords=search;find;locate;everything;files;
+StartupNotify=true
+DBusActivatable=false
+Actions=toggle;
+
+[Desktop Action toggle]
+Name=Show or Hide
+Exec=evos-gtk --toggle

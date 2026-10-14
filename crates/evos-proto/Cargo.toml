@@ -10,7 +10,6 @@ authors.workspace = true
 [dependencies]
 postcard = { version = "1", features = ["use-std"] }
 serde.workspace = true
-
 thiserror.workspace = true
 
 [dev-dependencies]

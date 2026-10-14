@@ -94,6 +94,8 @@ pub struct WalkReport {
     pub unreachable: bool,
     /// Folders that were queued but not listed (cancelled or unreachable).
     pub frontier: Vec<EntryId>,
+    /// Folders that were added to the index during the walk.
+    pub new_dirs: Vec<EntryId>,
 }
 
 impl WalkReport {
@@ -255,6 +257,7 @@ fn apply(
     report.added += outcome.added as u64;
     report.removed += outcome.removed as u64;
     report.updated += outcome.updated as u64;
+    report.new_dirs.extend_from_slice(&outcome.new_dirs);
 
     let mount_points: HashSet<&[u8]> = listing.mount_points.iter().map(Vec::as_slice).collect();
     let existing = if job.recurse_existing {
@@ -382,6 +385,7 @@ mod tests {
         let report = walk(&index, &[a], &inc, &Progress::default(), &none);
         assert_eq!(report.dirs_listed, 3, "a, a/new, a/new/inner");
         assert_eq!(report.removed, 4, "b, two.txt, c, three.txt");
+        assert_eq!(report.new_dirs.len(), 2, "a/new and a/new/inner");
         assert_eq!(report.updated, 1);
         let p = paths(&index);
         assert!(p.contains(&"/a/new/inner".to_owned()));

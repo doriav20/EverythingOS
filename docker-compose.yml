@@ -49,6 +49,40 @@ services:
       - .:/work
     command: ["bash", "packaging/arch/build-in-container.sh"]
 
+  # --- try it without installing: docker compose --profile run up -d ---
+  # The daemon joins the host's mount namespace, so it indexes the host
+  # with real paths and its socket appears in the host's /run/evos.
+  evosd:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.runtime
+    image: evos-runtime:latest
+    profiles: ["run"]
+    privileged: true
+    pid: host
+    # Kernel SMB/NFS mounts live in the network namespace that made them.
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - /run/evos:/run/evos
+      - ./packaging/run/evosd.toml:/etc/evos/evosd.toml:ro
+    command: ["evosd", "--host-mount-namespace"]
+
+  # The desktop client in a browser: http://localhost:8080
+  gui:
+    image: evos-runtime:latest
+    profiles: ["run"]
+    depends_on: [evosd]
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - /run/evos:/run/evos
+    command:
+      - sh
+      - -c
+      - gtk4-broadwayd --port 8080 --address 0.0.0.0 :0 & sleep 1; GDK_BACKEND=broadway BROADWAY_DISPLAY=:0 exec evos-gtk
+
   # --- end-to-end tests: docker compose --profile test run --rm e2e ---
   samba:
     build: docker/samba

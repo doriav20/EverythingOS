@@ -13,7 +13,9 @@ help:
 	@echo "  fmt     format the workspace"
 	@echo "  shell   interactive shell in the dev container"
 	@echo "  e2e     end-to-end tests against Samba and NFS servers"
-	@echo "  package build .deb, .rpm and .tar.gz packages into dist/"
+	@echo "  package build .deb, .rpm, .pkg.tar.zst and .tar.gz packages into dist/"
+	@echo "  run     run the daemon (indexing this host) and a browser GUI in containers"
+	@echo "  stop    stop them again"
 
 image:
 	$(COMPOSE) build dev
@@ -52,3 +54,13 @@ arch:
 deb rpm tarball: image
 	$(COMPOSE) --profile package build package
 	$(COMPOSE) --profile package run --rm package $@
+
+.PHONY: run stop
+# Try EverythingOS without installing it (Linux hosts): the daemon runs in a
+# container but indexes the host; the GUI is served on http://localhost:8080.
+run:
+	$(COMPOSE) --profile run up -d --build
+	@echo "GUI: http://localhost:8080   CLI: docker compose exec gui evos <query>"
+
+stop:
+	$(COMPOSE) --profile run down

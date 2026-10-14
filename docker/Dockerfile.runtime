@@ -1,0 +1,19 @@
+# Runtime image for trying EverythingOS without installing it:
+#   docker compose --profile run up -d
+FROM evos-dev:latest AS build
+WORKDIR /src
+COPY . .
+RUN cargo build --release --locked -p evosd -p evos-cli -p evos-gtk
+
+FROM ubuntu:24.04
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libgtk-4-1 libgtk-4-bin libadwaita-1-0 adwaita-icon-theme fonts-cantarell \
+        cifs-utils nfs-common sshfs ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+# Broadway reports no font DPI; without one, libadwaita sizes collapse.
+RUN mkdir -p /etc/gtk-4.0 && printf '[Settings]\ngtk-xft-dpi=98304\n' > /etc/gtk-4.0/settings.ini
+COPY --from=build /target/release/evosd /target/release/evos /target/release/evos-gtk /usr/bin/
+COPY packaging/config/evosd.toml /etc/evos/evosd.toml
+CMD ["evosd"]

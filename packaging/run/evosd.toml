@@ -1,0 +1,8 @@
+# Configuration for the containerized daemon (docker compose --profile run).
+# It is read inside the container, before the daemon joins the host.
+
+[network]
+# Only index shares mounted through EverythingOS (`evos mount add`), not
+# every network or host-bridge mount the machine has (on Docker Desktop
+# that would include the Windows/macOS drives shared with its VM).
+index_unmanaged = false

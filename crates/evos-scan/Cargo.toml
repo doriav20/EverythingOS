@@ -10,3 +10,6 @@ authors.workspace = true
 [dependencies]
 evos-core.workspace = true
 rustix = { version = "1", features = ["event", "fs"] }
+
+[dev-dependencies]
+tempfile = "3"

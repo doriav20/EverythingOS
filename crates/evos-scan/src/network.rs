@@ -39,6 +39,8 @@ pub struct NetworkOptions {
     pub smb_notify: bool,
     /// How often to probe an offline share.
     pub offline_retry: Duration,
+    /// Treat the share as offline unless its root is a mount point.
+    pub require_mount: bool,
 }
 
 impl Default for NetworkOptions {
@@ -50,8 +52,27 @@ impl Default for NetworkOptions {
             exclude: None,
             smb_notify: true,
             offline_retry: Duration::from_secs(30),
+            require_mount: true,
         }
     }
+}
+
+/// Is the share there? With `require_mount` the root must also be a mount
+/// point: an unmounted share leaves an empty local folder behind, and
+/// sweeping that would wipe the share's index.
+fn share_available(root: &[u8], require_mount: bool) -> bool {
+    let Ok(info) = fsops::stat_info(root, CacheMode::Revalidate) else {
+        return false;
+    };
+    if !require_mount || info.mount_root {
+        return true;
+    }
+    // Kernels without STATX_ATTR_MOUNT_ROOT: compare with the parent.
+    let parent = match root.iter().rposition(|&b| b == b'/') {
+        Some(0) | None => &b"/"[..],
+        Some(cut) => &root[..cut],
+    };
+    fsops::stat_info(parent, CacheMode::Cached).is_ok_and(|p| p.dev != info.dev)
 }
 
 fn is_cifs(fs_type: &str) -> bool {
@@ -160,17 +181,19 @@ pub fn run_network(vol: &Arc<Volume>, opts: &NetworkOptions) {
     };
 
     while !vol.is_stopping() {
-        if offline {
-            if fsops::stat(vol.root(), CacheMode::Revalidate).is_ok() {
-                offline = false;
-                vol.update_status(|s| {
-                    s.phase = Phase::Live;
-                    s.error = None;
-                });
-            } else {
-                vol.wait(opts.offline_retry);
-                continue;
+        let available = share_available(vol.root(), opts.require_mount);
+        if offline && available {
+            offline = false;
+            vol.update_status(|s| {
+                s.phase = Phase::Live;
+                s.error = None;
+            });
+        } else if !available {
+            if !offline {
+                go_offline(&mut offline);
             }
+            vol.wait(opts.offline_retry);
+            continue;
         }
 
         let checkpoint = vol.checkpoint();
@@ -330,6 +353,7 @@ mod tests {
                 refresh_interval: Duration::from_secs(3600),
             },
             smb_notify: false,
+            require_mount: false,
             ..Default::default()
         }
     }
@@ -411,6 +435,37 @@ mod tests {
             .resolve(&p(root, "/todo/inner"))
             .is_some()));
         assert!(wait_for(&vol, |_| vol.checkpoint().scan_complete));
+        vol.stop();
+        driver.join().unwrap();
+    }
+
+    #[test]
+    fn unmounted_share_goes_offline_and_keeps_its_index() {
+        // A plain folder stands in for the empty mount point left behind
+        // by an unmounted share.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut ix = Index::new(tmp.path().as_os_str().as_bytes(), Meta::dir(0));
+        ix.insert(ROOT, b"remote-file.txt", Meta::file(1, 1));
+        let vol = Arc::new(Volume::new(
+            ix,
+            "cifs",
+            Checkpoint {
+                scan_complete: true,
+                frontier: vec![],
+            },
+        ));
+        let opts = NetworkOptions {
+            require_mount: true,
+            ..fast()
+        };
+        let v = vol.clone();
+        let driver = std::thread::spawn(move || run_network(&v, &opts));
+        assert!(wait_for(&vol, |_| vol.status().phase == Phase::Offline));
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(
+            vol.index.read().lookup(ROOT, b"remote-file.txt").is_some(),
+            "index kept"
+        );
         vol.stop();
         driver.join().unwrap();
     }

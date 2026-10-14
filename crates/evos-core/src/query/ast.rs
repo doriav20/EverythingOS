@@ -1,5 +1,7 @@
 //! Parsed query representation.
 
+pub use super::values::Bounds;
+
 /// A parsed query.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
@@ -16,6 +18,24 @@ pub enum Expr {
 pub enum Filter {
     Text(TextMatch),
     Kind(Kind),
+    /// Case-folded extensions without the dot (`ext:jpg;png`).
+    Ext(Vec<String>),
+    /// File size in bytes. Never matches folders.
+    Size(Bounds<u64>),
+    /// Modification time in Unix nanoseconds.
+    Modified(Bounds<i64>),
+    /// Number of components in the absolute path (`/etc/hosts` is 2).
+    Depth(Bounds<u64>),
+    /// Name length in characters.
+    Len(Bounds<u64>),
+    /// Direct children of this absolute folder path.
+    Parent(String),
+    /// Everything below this absolute folder path.
+    Under(String),
+    /// Folders without children.
+    Empty,
+    /// Regular files with an execute permission bit.
+    Executable,
 }
 
 /// Files or folders.

@@ -3,6 +3,7 @@
 mod ast;
 mod lexer;
 mod parser;
+mod values;
 
-pub use ast::{Expr, Filter, Kind, PatternKind, Target, TextMatch};
+pub use ast::{Bounds, Expr, Filter, Kind, PatternKind, Target, TextMatch};
 pub use parser::{parse, ParseOptions};

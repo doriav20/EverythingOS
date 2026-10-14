@@ -8,4 +8,5 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 hashbrown = "0.15"

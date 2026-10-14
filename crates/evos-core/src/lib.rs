@@ -5,5 +5,6 @@
 pub mod fold;
 pub mod query;
 pub mod store;
+pub mod wildcard;
 
 pub use store::{EntryId, Index, ListedEntry, ListingOutcome, Meta, NO_ENTRY, ROOT};

@@ -408,15 +408,23 @@ impl Index {
 
     /// Moves and/or renames an entry, keeping its id and subtree.
     ///
-    /// An existing entry at the destination is replaced.
-    pub fn rename(&mut self, id: EntryId, new_parent: EntryId, new_name: &[u8]) {
+    /// An existing entry at the destination is replaced. Moves that are
+    /// impossible on a real filesystem (into the entry's own subtree, or
+    /// over one of its ancestors) are refused and return false.
+    pub fn rename(&mut self, id: EntryId, new_parent: EntryId, new_name: &[u8]) -> bool {
         assert_ne!(id, ROOT, "the volume root cannot be moved");
         debug_assert!(self.is_dir(new_parent));
         if self.parent[id as usize] == new_parent && self.name(id) == new_name {
-            return;
+            return true;
+        }
+        if self.is_within(new_parent, id) {
+            return false;
         }
         if let Some(existing) = self.lookup(new_parent, new_name) {
             if existing != id {
+                if self.is_within(id, existing) {
+                    return false;
+                }
                 self.remove(existing);
             }
         }
@@ -435,6 +443,19 @@ impl Index {
         self.link(new_parent, id);
         self.hash_insert(id);
         self.generation += 1;
+        true
+    }
+
+    /// True if `id` is `ancestor` or lies in its subtree.
+    pub fn is_within(&self, id: EntryId, ancestor: EntryId) -> bool {
+        let mut cur = id;
+        while cur != NO_ENTRY {
+            if cur == ancestor {
+                return true;
+            }
+            cur = self.parent[cur as usize];
+        }
+        false
     }
 
     /// Reconciles the children of `dir` with a fresh directory listing.
@@ -794,6 +815,17 @@ mod tests {
         assert!(!ix.is_alive(b));
         assert_eq!(ix.lookup(docs, b"B.TXT"), Some(a));
         assert_eq!(ix.children(docs).collect::<Vec<_>>(), vec![a]);
+    }
+
+    #[test]
+    fn rename_refuses_impossible_moves() {
+        let (mut ix, docs, a, _) = sample();
+        let sub = ix.insert(docs, b"sub", Meta::dir(0));
+        assert!(!ix.rename(docs, sub, b"loop"), "into its own subtree");
+        assert!(!ix.rename(sub, ROOT, b"Docs"), "over its own ancestor");
+        assert!(ix.is_alive(docs) && ix.is_alive(sub) && ix.is_alive(a));
+        assert_eq!(ix.path(sub), b"/data/Docs/sub");
+        assert!(ix.is_within(a, docs) && !ix.is_within(docs, a));
     }
 
     #[test]

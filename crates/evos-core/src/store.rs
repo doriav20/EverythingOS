@@ -343,15 +343,7 @@ impl Index {
         debug_assert!(self.lookup(parent, name).is_none(), "duplicate entry");
         let id = self.push_entry(parent, name, meta);
         self.link(parent, id);
-        let hash = self.key_hash(parent, name);
-        let (parents, names, name_off, name_len) =
-            (&self.parent, &self.names, &self.name_off, &self.name_len);
-        let hasher = &self.hasher;
-        self.lookup.insert_unique(hash, id, |&other| {
-            let i = other as usize;
-            let off = name_off[i] as usize;
-            hasher.hash_one((parents[i], &names[off..off + name_len[i] as usize]))
-        });
+        self.hash_insert(id);
         self.generation += 1;
         id
     }
@@ -441,15 +433,7 @@ impl Index {
         }
         self.parent[i] = new_parent;
         self.link(new_parent, id);
-        let hash = self.key_hash(new_parent, new_name);
-        let (parents, names, name_off, name_len) =
-            (&self.parent, &self.names, &self.name_off, &self.name_len);
-        let hasher = &self.hasher;
-        self.lookup.insert_unique(hash, id, |&other| {
-            let i = other as usize;
-            let off = name_off[i] as usize;
-            hasher.hash_one((parents[i], &names[off..off + name_len[i] as usize]))
-        });
+        self.hash_insert(id);
         self.generation += 1;
     }
 
@@ -500,8 +484,120 @@ impl Index {
         1.0 - self.live as f64 / self.len() as f64
     }
 
+    /// Returns true when tombstones or stale name bytes waste enough memory
+    /// that [`Index::compact`] is worth its cost.
+    pub fn should_compact(&self) -> bool {
+        self.len() > 4096
+            && (self.tombstone_ratio() > 0.25 || self.garbage_bytes > self.names.len() / 2)
+    }
+
+    /// Drops tombstones and unused name bytes, renumbering all entries.
+    ///
+    /// Returns a map from old to new ids (`NO_ENTRY` for removed entries) so
+    /// that callers can translate ids they hold. Bumps [`Index::epoch`].
+    pub fn compact(&mut self) -> Vec<EntryId> {
+        let mut remap = vec![NO_ENTRY; self.len()];
+        let mut next: EntryId = 0;
+        for (old, slot) in remap.iter_mut().enumerate() {
+            if self.flags[old] & FLAG_DELETED == 0 {
+                *slot = next;
+                next += 1;
+            }
+        }
+        let map = |id: EntryId| {
+            if id == NO_ENTRY {
+                NO_ENTRY
+            } else {
+                remap[id as usize]
+            }
+        };
+
+        let live = next as usize;
+        let mut out = Index::new(&self.root_path, self.meta(ROOT));
+        out.clear_columns(live);
+        out.names
+            .reserve(self.names.len().saturating_sub(self.garbage_bytes / 2));
+        out.folded
+            .reserve(self.folded.len().saturating_sub(self.garbage_bytes / 2));
+        for old in (0..self.len()).filter(|&i| remap[i] != NO_ENTRY) {
+            let id = old as EntryId;
+            out.parent.push(map(self.parent[old]));
+            out.first_child.push(map(self.first_child[old]));
+            out.next_sibling.push(map(self.next_sibling[old]));
+            out.prev_sibling.push(map(self.prev_sibling[old]));
+            out.name_off.push(arena_offset(out.names.len()));
+            out.name_len.push(self.name_len[old]);
+            out.names.extend_from_slice(self.name(id));
+            out.fold_off.push(arena_offset(out.folded.len()));
+            out.fold_len.push(self.fold_len[old]);
+            out.folded.extend_from_slice(self.folded_name(id));
+            out.size.push(self.size[old]);
+            out.mtime.push(self.mtime[old]);
+            out.mode.push(self.mode[old]);
+            out.uid.push(self.uid[old]);
+            out.gid.push(self.gid[old]);
+            out.flags.push(self.flags[old]);
+        }
+        out.live = live;
+        out.rebuild_lookup();
+        out.generation = self.generation + 1;
+        out.epoch = self.epoch + 1;
+        *self = out;
+        remap
+    }
+
+    /// Empties every column, keeping room for `capacity` entries.
+    pub(crate) fn clear_columns(&mut self, capacity: usize) {
+        macro_rules! reset {
+            ($($col:ident),*) => {$( self.$col = Vec::with_capacity(capacity); )*};
+        }
+        reset!(
+            parent,
+            first_child,
+            next_sibling,
+            prev_sibling,
+            name_off,
+            name_len,
+            fold_off,
+            fold_len,
+            size,
+            mtime,
+            mode,
+            uid,
+            gid,
+            flags
+        );
+        self.names.clear();
+        self.folded.clear();
+        self.lookup.clear();
+        self.live = 0;
+        self.garbage_bytes = 0;
+    }
+
+    /// Rebuilds the (parent, name) lookup table from the columns.
+    pub(crate) fn rebuild_lookup(&mut self) {
+        self.lookup = HashTable::with_capacity(self.live);
+        for id in 1..self.len() as EntryId {
+            if self.is_alive(id) {
+                self.hash_insert(id);
+            }
+        }
+    }
+
     fn key_hash(&self, parent: EntryId, name: &[u8]) -> u64 {
         self.hasher.hash_one((parent, name))
+    }
+
+    fn hash_insert(&mut self, id: EntryId) {
+        let hash = self.key_hash(self.parent[id as usize], self.name(id));
+        let (parents, names, name_off, name_len) =
+            (&self.parent, &self.names, &self.name_off, &self.name_len);
+        let hasher = &self.hasher;
+        self.lookup.insert_unique(hash, id, |&other| {
+            let i = other as usize;
+            let off = name_off[i] as usize;
+            hasher.hash_one((parents[i], &names[off..off + name_len[i] as usize]))
+        });
     }
 
     fn unhash(&mut self, id: EntryId) {
@@ -731,6 +827,54 @@ mod tests {
         assert_eq!(ix.size(b), 21);
         let unchanged = ix.apply_listing(docs, &listing);
         assert!(!unchanged.changed());
+    }
+
+    #[test]
+    fn compact_renumbers_and_preserves_tree() {
+        let (mut ix, docs, a, b) = sample();
+        let gone = ix.insert(ROOT, b"gone", Meta::dir(0));
+        ix.insert(gone, b"child", Meta::file(1, 1));
+        ix.rename(b, docs, b"renamed.txt");
+        ix.remove(gone);
+        let epoch = ix.epoch();
+        let before: Vec<Vec<u8>> = [docs, a, b].iter().map(|&id| ix.path(id)).collect();
+
+        let remap = ix.compact();
+
+        assert_eq!(ix.epoch(), epoch + 1);
+        assert_eq!(ix.len(), 4);
+        assert_eq!(ix.live_count(), 4);
+        assert_eq!(ix.garbage_bytes(), 0);
+        assert_eq!(remap[gone as usize], NO_ENTRY);
+        let after: Vec<Vec<u8>> = [docs, a, b]
+            .iter()
+            .map(|&id| ix.path(remap[id as usize]))
+            .collect();
+        assert_eq!(before, after);
+        let new_docs = remap[docs as usize];
+        assert_eq!(ix.lookup(new_docs, b"renamed.txt"), Some(remap[b as usize]));
+        assert_eq!(ix.resolve(b"/data/Docs/a.txt"), Some(remap[a as usize]));
+        let mut kids: Vec<_> = ix.children(new_docs).collect();
+        kids.sort();
+        assert_eq!(kids, vec![remap[a as usize], remap[b as usize]]);
+        // The compacted index stays fully mutable.
+        let c = ix.insert(new_docs, b"c", Meta::file(3, 3));
+        assert_eq!(ix.path(c), b"/data/Docs/c");
+    }
+
+    #[test]
+    fn should_compact_after_mass_deletion() {
+        let mut ix = Index::new(b"/", Meta::dir(0));
+        let dir = ix.insert(ROOT, b"d", Meta::dir(0));
+        for i in 0..5000 {
+            ix.insert(dir, format!("f{i}").as_bytes(), Meta::file(0, 0));
+        }
+        assert!(!ix.should_compact());
+        ix.remove(dir);
+        assert!(ix.should_compact());
+        ix.compact();
+        assert_eq!(ix.len(), 1);
+        assert!(!ix.should_compact());
     }
 
     #[test]

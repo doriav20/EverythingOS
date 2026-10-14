@@ -8,7 +8,7 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -120,6 +120,7 @@ pub struct VolumeManager {
     mounts: Arc<MountManager>,
     volumes: RwLock<Vec<Arc<VolumeHandle>>>,
     next_id: AtomicU16,
+    closed: AtomicBool,
 }
 
 impl VolumeManager {
@@ -129,6 +130,7 @@ impl VolumeManager {
             mounts,
             volumes: RwLock::new(Vec::new()),
             next_id: AtomicU16::new(1),
+            closed: AtomicBool::new(false),
         }
     }
 
@@ -169,7 +171,9 @@ impl VolumeManager {
             }
             let class = m.class();
             let point = String::from_utf8_lossy(&m.mount_point);
-            let skip = class == MountClass::Ignored
+            // A mount the user explicitly asked for is indexed whatever its
+            // filesystem type (e.g. a bind mount of an overlay folder).
+            let skip = (class == MountClass::Ignored && spec.is_none())
                 || (m.fs_type == "tmpfs" && !cfg.local.index_tmpfs && spec.is_none())
                 || cfg
                     .local
@@ -220,6 +224,9 @@ impl VolumeManager {
 
     /// Attaches new volumes and detaches vanished ones.
     pub fn sync(&self) {
+        if self.closed.load(Ordering::Relaxed) {
+            return;
+        }
         let wanted = self.wanted();
         let current = self.volumes();
         for handle in &current {
@@ -303,6 +310,7 @@ impl VolumeManager {
 
     /// Stops all drivers and saves every volume.
     pub fn shutdown(&self) {
+        self.closed.store(true, Ordering::Relaxed);
         let handles = std::mem::take(&mut *self.volumes.write());
         for h in &handles {
             h.vol.stop();

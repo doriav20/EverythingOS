@@ -1,0 +1,14 @@
+[package]
+name = "evosd"
+description = "EverythingOS indexing daemon"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+evos-core.workspace = true
+evos-scan.workspace = true
+evos-mount.workspace = true
+evos-proto.workspace = true

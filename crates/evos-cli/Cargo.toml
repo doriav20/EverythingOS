@@ -1,0 +1,15 @@
+[package]
+name = "evos-cli"
+description = "EverythingOS command-line search client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "evos"
+path = "src/main.rs"
+
+[dependencies]
+evos-proto.workspace = true

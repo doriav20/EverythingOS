@@ -2,6 +2,7 @@
 //! walker, live change watchers for local filesystems and the adaptive
 //! scheduler that keeps network shares fresh.
 
+pub mod changes;
 pub mod fsops;
 pub mod mountinfo;
 pub mod sweep;

@@ -61,7 +61,9 @@ const BASE_MASK: u64 = FAN_CREATE
 /// A fanotify group watching one whole filesystem.
 pub struct FanotifyWatcher {
     fd: OwnedFd,
-    mount_fd: OwnedFd,
+    /// Opened briefly per batch to resolve handles. Holding it open would
+    /// keep the filesystem busy and make it impossible to unmount.
+    mount_path: std::ffi::CString,
     /// FAN_RENAME (Linux 5.17+) reports both ends of a move in one event.
     pub rename_events: bool,
     buf: Vec<u8>,
@@ -121,23 +123,23 @@ impl FanotifyWatcher {
             Err(e) => return Err(e),
         };
 
-        // SAFETY: NUL-terminated path; we own the returned descriptor.
-        let mfd = unsafe {
-            libc::open(
-                path.as_ptr(),
-                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
-            )
-        };
-        if mfd < 0 {
-            return Err(last_error());
-        }
-        let mount_fd = unsafe { OwnedFd::from_raw_fd(mfd) };
         Ok(FanotifyWatcher {
             fd,
-            mount_fd,
+            mount_path: path,
             rename_events,
             buf: vec![0u8; 256 * 1024],
         })
+    }
+
+    fn open_mount(&self) -> Option<OwnedFd> {
+        // SAFETY: NUL-terminated path; we own the returned descriptor.
+        let fd = unsafe {
+            libc::open(
+                self.mount_path.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+            )
+        };
+        (fd >= 0).then(|| unsafe { OwnedFd::from_raw_fd(fd) })
     }
 
     /// Waits up to `timeout` for events and appends the decoded changes.
@@ -161,6 +163,7 @@ impl FanotifyWatcher {
         if n == 0 {
             return Ok(());
         }
+        let mount_fd = self.open_mount();
         let mut paths = PathCache::default();
         loop {
             // SAFETY: reading into our own buffer.
@@ -182,7 +185,9 @@ impl FanotifyWatcher {
                 return Ok(());
             }
             let data = self.buf[..len as usize].to_vec();
-            decode(&data, &self.mount_fd, &mut paths, out);
+            if let Some(mount_fd) = &mount_fd {
+                decode(&data, mount_fd, &mut paths, out);
+            }
             if (len as usize) < self.buf.len() / 2 {
                 return Ok(());
             }
@@ -375,6 +380,27 @@ mod tests {
 
     fn b(p: &Path) -> Vec<u8> {
         p.as_os_str().as_bytes().to_vec()
+    }
+
+    #[test]
+    fn watching_does_not_block_unmount() {
+        let Some(mut fs_) = TestFs::new() else {
+            eprintln!("skipping: cannot mount tmpfs here");
+            return;
+        };
+        let root = fs_.path();
+        let Ok(mut w) = FanotifyWatcher::new(&b(&root)) else {
+            eprintln!("skipping: fanotify unavailable");
+            return;
+        };
+        fs::write(root.join("x"), b"").unwrap();
+        collect(&mut w, |c| !c.is_empty());
+        let status = Command::new("umount").arg(&root).status().unwrap();
+        assert!(
+            status.success(),
+            "the watched filesystem must stay unmountable"
+        );
+        fs_.mounted = false;
     }
 
     #[test]

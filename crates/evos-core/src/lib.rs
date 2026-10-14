@@ -3,6 +3,7 @@
 //! reading and writing index snapshots.
 
 pub mod fold;
+pub mod perm;
 pub mod query;
 pub mod search;
 pub mod sort;

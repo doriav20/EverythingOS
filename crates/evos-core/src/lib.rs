@@ -3,6 +3,7 @@
 //! reading and writing index snapshots.
 
 pub mod fold;
+pub mod query;
 pub mod store;
 
 pub use store::{EntryId, Index, ListedEntry, ListingOutcome, Meta, NO_ENTRY, ROOT};

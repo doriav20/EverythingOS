@@ -2,3 +2,6 @@
 //! and the mount/unmount/reconnect logic run by the daemon.
 
 pub mod command;
+pub mod store;
+
+pub use store::MountStore;

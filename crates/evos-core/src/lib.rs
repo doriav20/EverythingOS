@@ -5,6 +5,7 @@
 pub mod fold;
 pub mod query;
 pub mod search;
+pub mod sort;
 pub mod store;
 pub mod wildcard;
 

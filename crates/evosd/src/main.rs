@@ -42,6 +42,9 @@ fn enter_host_mount_namespace() -> std::io::Result<()> {
 
 fn main() -> ExitCode {
     let args = Args::parse();
+    // Read the configuration first: with --host-mount-namespace it comes
+    // from the container image, everything after from the host.
+    let config = Config::load(&args.config);
     if args.host_mount_namespace {
         if let Err(e) = enter_host_mount_namespace() {
             eprintln!("evosd: cannot join the host mount namespace: {e}");
@@ -53,7 +56,7 @@ fn main() -> ExitCode {
         .with_target(false)
         .init();
 
-    let mut cfg = match Config::load(&args.config) {
+    let mut cfg = match config {
         Ok(cfg) => cfg,
         Err(e) => {
             tracing::error!("{e}");

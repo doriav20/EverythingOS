@@ -8,3 +8,6 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+postcard = { version = "1", features = ["use-std"] }
+serde.workspace = true
+

@@ -4,3 +4,4 @@
 
 pub mod fsops;
 pub mod mountinfo;
+pub mod walker;

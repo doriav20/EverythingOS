@@ -8,7 +8,9 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+crossbeam-channel = "0.5"
 evos-core.workspace = true
+parking_lot = "0.12"
 rustix = { version = "1", features = ["event", "fs"] }
 
 [dev-dependencies]

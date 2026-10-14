@@ -16,7 +16,7 @@ use regex::bytes::{Regex, RegexBuilder};
 
 use crate::fold;
 use crate::query::{Bounds, Expr, Filter, Kind, PatternKind, Target, TextMatch};
-use crate::store::{mode, EntryId, Index, ROOT};
+use crate::store::{extension, mode, EntryId, Index, ROOT};
 use crate::wildcard::Wildcard;
 use path_dfa::{Dfa, PathMemo, MAX_NEEDLE};
 
@@ -546,13 +546,6 @@ fn is_dir_prefix(prefix: &[u8], root: &[u8]) -> bool {
     let p = fold::fold(prefix);
     let r = fold::fold(root);
     r.starts_with(&p) && (r.len() == p.len() || r[p.len()] == b'/')
-}
-
-fn extension(name: &[u8]) -> &[u8] {
-    match memchr::memrchr(b'.', name) {
-        Some(0) | None => b"",
-        Some(dot) => &name[dot + 1..],
-    }
 }
 
 fn char_count(name: &[u8]) -> u64 {

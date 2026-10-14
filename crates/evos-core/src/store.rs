@@ -690,6 +690,14 @@ impl Iterator for Children<'_> {
     }
 }
 
+/// Extension of a filename without the dot; empty for none and for dotfiles.
+pub fn extension(name: &[u8]) -> &[u8] {
+    match name.iter().rposition(|&b| b == b'.') {
+        Some(0) | None => b"",
+        Some(dot) => &name[dot + 1..],
+    }
+}
+
 fn arena_offset(len: usize) -> u32 {
     u32::try_from(len).expect("name arena exceeds 4 GiB; compact the index")
 }

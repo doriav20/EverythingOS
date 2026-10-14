@@ -41,6 +41,14 @@ services:
     entrypoint: ["scripts/package.sh"]
     command: ["all"]
 
+  package-arch:
+    image: archlinux:latest
+    profiles: ["package"]
+    working_dir: /work
+    volumes:
+      - .:/work
+    command: ["bash", "packaging/arch/build-in-container.sh"]
+
   # --- end-to-end tests: docker compose --profile test run --rm e2e ---
   samba:
     build: docker/samba

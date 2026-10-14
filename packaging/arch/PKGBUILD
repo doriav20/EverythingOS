@@ -1,0 +1,59 @@
+# Maintainer: doriav <doriav20@gmail.com>
+#
+# Builds from the surrounding source checkout:
+#   cd packaging/arch && makepkg -si
+
+pkgbase=evos
+pkgname=(evos evos-gtk)
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Instant file search for Linux, including network shares"
+arch=(x86_64 aarch64)
+license=(MIT)
+makedepends=(cargo gtk4 libadwaita)
+options=(!lto !debug)
+
+_src() {
+    realpath "$startdir/../.."
+}
+
+build() {
+    cd "$(_src)"
+    export CARGO_TARGET_DIR="$srcdir/target"
+    cargo build --release --locked -p evosd -p evos-cli -p evos-gtk
+}
+
+check() {
+    cd "$(_src)"
+    export CARGO_TARGET_DIR="$srcdir/target"
+    cargo test --release --locked -p evos-core
+}
+
+package_evos() {
+    pkgdesc="Instant file search for Linux: daemon and command-line client"
+    depends=(glibc gcc-libs cifs-utils nfs-utils)
+    optdepends=('sshfs: mounting SSHFS shares'
+                'polkit: managing mounts without sudo')
+    backup=(etc/evos/evosd.toml)
+    install=evos.install
+    local src
+    src=$(_src)
+    install -Dm755 "$srcdir/target/release/evosd" "$pkgdir/usr/bin/evosd"
+    install -Dm755 "$srcdir/target/release/evos" "$pkgdir/usr/bin/evos"
+    install -Dm644 "$src/packaging/systemd/evosd.service" "$pkgdir/usr/lib/systemd/system/evosd.service"
+    install -Dm644 "$src/packaging/polkit/org.evos.policy" "$pkgdir/usr/share/polkit-1/actions/org.evos.policy"
+    install -Dm644 "$src/packaging/config/evosd.toml" "$pkgdir/etc/evos/evosd.toml"
+    install -Dm644 "$src/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 "$src/README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
+}
+
+package_evos-gtk() {
+    pkgdesc="Instant file search for Linux: desktop client"
+    depends=(evos gtk4 libadwaita)
+    local src
+    src=$(_src)
+    install -Dm755 "$srcdir/target/release/evos-gtk" "$pkgdir/usr/bin/evos-gtk"
+    install -Dm644 "$src/packaging/desktop/org.evos.Search.desktop" "$pkgdir/usr/share/applications/org.evos.Search.desktop"
+    install -Dm644 "$src/packaging/icons/org.evos.Search.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/org.evos.Search.svg"
+    install -Dm644 "$src/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

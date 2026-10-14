@@ -40,11 +40,14 @@ e2e:
 	$(COMPOSE) --profile test run --rm e2e
 	$(COMPOSE) --profile test down
 
-.PHONY: package deb rpm tarball
-# Packages for Debian/Ubuntu, Fedora/openSUSE and a generic tarball, in dist/.
-package: image
+.PHONY: package deb rpm tarball arch
+# Packages for Debian/Ubuntu, Fedora/openSUSE, Arch and a generic tarball, in dist/.
+package: image arch
 	$(COMPOSE) --profile package build package
 	$(COMPOSE) --profile package run --rm package all
+
+arch:
+	$(COMPOSE) --profile package run --rm package-arch
 
 deb rpm tarball: image
 	$(COMPOSE) --profile package build package

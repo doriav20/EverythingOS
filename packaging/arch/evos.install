@@ -1,0 +1,11 @@
+post_install() {
+    echo ":: Start indexing with: systemctl enable --now evosd"
+}
+
+post_upgrade() {
+    systemctl try-restart evosd.service 2>/dev/null || true
+}
+
+pre_remove() {
+    systemctl disable --now evosd.service 2>/dev/null || true
+}

@@ -8,6 +8,7 @@ pub mod fsops;
 pub mod inotify;
 pub mod mountinfo;
 pub mod schedule;
+pub mod smbnotify;
 pub mod sweep;
 pub mod throttle;
 pub mod walker;

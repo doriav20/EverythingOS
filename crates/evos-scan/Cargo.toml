@@ -10,6 +10,7 @@ authors.workspace = true
 [dependencies]
 crossbeam-channel = "0.5"
 evos-core.workspace = true
+libc = "0.2"
 parking_lot = "0.12"
 rustix = { version = "1", features = ["event", "fs"] }
 

@@ -81,6 +81,30 @@ fn open_dir(path: &[u8]) -> io::Result<OwnedFd> {
     )?)
 }
 
+/// Metadata plus the identity of the filesystem an entry lives on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StatInfo {
+    pub meta: Meta,
+    pub dev: (u32, u32),
+    /// The entry is the root of a mount (including bind mounts).
+    pub mount_root: bool,
+}
+
+/// Like [`stat`], but also reports the device and mount-root flag.
+pub fn stat_info(path: &[u8], cache: CacheMode) -> io::Result<StatInfo> {
+    let st = rustix::fs::statx(
+        CWD,
+        os_path(path),
+        AtFlags::SYMLINK_NOFOLLOW | cache.flags(),
+        MASK,
+    )?;
+    Ok(StatInfo {
+        meta: meta_of(&st),
+        dev: (st.stx_dev_major, st.stx_dev_minor),
+        mount_root: st.stx_attributes.bits() & st.stx_attributes_mask.bits() & ATTR_MOUNT_ROOT != 0,
+    })
+}
+
 /// Stats a path without following a final symlink.
 pub fn stat(path: &[u8], cache: CacheMode) -> io::Result<Meta> {
     let st = rustix::fs::statx(

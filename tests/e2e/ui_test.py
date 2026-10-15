@@ -141,6 +141,27 @@ def text_of(node):
         return ""
 
 
+def bold_text(node):
+    """The bold parts of a label: the highlighted search terms."""
+    # Character by character: GTK reports a plain run as reaching the end
+    # of the text, so runs cannot be skipped over.
+    text = text_of(node)
+    out = ""
+    for offset, char in enumerate(text):
+        attrs, _, _ = Atspi.Text.get_attribute_run(node, offset, False)
+        if (attrs or {}).get("weight") == "700":
+            out += char
+    return out
+
+
+def first_name_label():
+    rows_ = visible_rows()
+    for n in walk(rows_[0]) if rows_ else []:
+        if n.get_role_name() == "label":
+            return n
+    return None
+
+
 def remote(*args):
     """Runs evos-gtk; the arguments go to the running window."""
     subprocess.run(["evos-gtk", *args], check=True, timeout=30)
@@ -342,6 +363,16 @@ def preview_has_image():
     return False
 
 
+def guarded(fn, *args):
+    """Runs a group of checks; an exception fails it instead of silently
+    skipping the rest."""
+    try:
+        fn(*args)
+    except Exception:
+        import traceback
+        check(False, f"{fn.__name__} crashed: " + traceback.format_exc())
+
+
 def search(query, *more):
     remote("-s", query, *more)
 
@@ -353,10 +384,15 @@ def local(disk, ro):
     check(wait(lambda: names() == ["q1 report.pdf", "q2 report.pdf"]),
           "a search from the command line reaches the running window")
     check(wait(lambda: count_text().startswith("2 objects")), "the status bar counts the results")
+    check(wait(lambda: bold_text(first_name_label()) == "report"),
+          "the search term is highlighted in the name "
+          f"[{accessible_name(first_name_label())!r}: {bold_text(first_name_label())!r}]")
 
     search("שלום")
     check(wait(lambda: names() == ["שָׁלוֹם.txt"]),
           "a Hebrew search without niqqud finds the pointed name")
+    check(wait(lambda: bold_text(first_name_label()) == "שָׁלוֹם"),
+          "the highlight covers the pointed Hebrew word, niqqud included")
     search("ファイル")
     check(wait(lambda: names() == ["ファイル.txt"]), "Japanese names")
     search("ΑΡΧΕΊΟ")
@@ -465,9 +501,9 @@ def local(disk, ro):
     os.remove(os.path.join(disk, "docs", "ui-live-update.txt"))
     check(wait(lambda: total() == 0), "a deleted file disappears from the open window")
 
-    keyboard_and_mouse(disk, settings_file)
-    mounts_in_preferences(disk)
-    service_restart()
+    guarded(keyboard_and_mouse, disk, settings_file)
+    guarded(mounts_in_preferences, disk)
+    guarded(service_restart)
 
     remote("-new-window", "-s", "report")
     check(wait(lambda: len(find_all("frame")) == 2), "File > New Window")
@@ -737,11 +773,11 @@ def main():
         return 1
     mode = sys.argv[1]
     if mode == "local":
-        local(sys.argv[2], sys.argv[3])
+        guarded(local, sys.argv[2], sys.argv[3])
     elif mode == "share":
-        share(sys.argv[2], sys.argv[3])
+        guarded(share, sys.argv[2], sys.argv[3])
     elif mode == "share-mount":
-        share_mount(*sys.argv[2:6])
+        guarded(share_mount, *sys.argv[2:6])
     return 1 if failures else 0
 
 

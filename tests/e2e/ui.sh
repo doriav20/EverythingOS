@@ -26,14 +26,20 @@ stop_ui() {
     wait "$GTK_PID" "$XVFB_PID" 2>/dev/null
 }
 
-# run_ui_test ARGS...: runs the AT-SPI test and counts its results.
+# run_ui_test ARGS...: runs the AT-SPI test and counts its results. A test
+# that dies or checks nothing is a failure, not a quiet success.
 run_ui_test() {
-    local line
+    local line checks=0 failed_before=$FAIL status
+    python3 tests/e2e/ui_test.py "$@" >"$UI_DIR/test.out" 2>&1
+    status=$?
     while IFS= read -r line; do
         echo "$line"
         case $line in
-        "PASS "*) PASS=$((PASS + 1)) ;;
-        "FAIL "*) FAIL=$((FAIL + 1)) ;;
+        "PASS "*) PASS=$((PASS + 1)) checks=$((checks + 1)) ;;
+        "FAIL "*) FAIL=$((FAIL + 1)) checks=$((checks + 1)) ;;
         esac
-    done < <(python3 tests/e2e/ui_test.py "$@" 2>&1)
+    done <"$UI_DIR/test.out"
+    if [ "$checks" -eq 0 ] || { [ "$status" -ne 0 ] && [ "$FAIL" -eq "$failed_before" ]; }; then
+        fail "ui_test.py $1 exited with status $status after $checks checks"
+    fi
 }

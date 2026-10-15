@@ -496,6 +496,33 @@ impl Index {
         false
     }
 
+    /// Approximate heap memory the index occupies, in bytes.
+    pub fn memory_bytes(&self) -> usize {
+        fn bytes<T>(v: &[T]) -> usize {
+            std::mem::size_of_val(v)
+        }
+        let per_entry = bytes(&self.parent)
+            + bytes(&self.first_child)
+            + bytes(&self.next_sibling)
+            + bytes(&self.prev_sibling)
+            + bytes(&self.name_off)
+            + bytes(&self.name_len)
+            + bytes(&self.fold_off)
+            + bytes(&self.fold_len)
+            + bytes(&self.size)
+            + bytes(&self.mtime)
+            + bytes(&self.mode)
+            + bytes(&self.uid)
+            + bytes(&self.gid)
+            + bytes(&self.btime)
+            + bytes(&self.atime)
+            + bytes(&self.changed)
+            + bytes(&self.flags);
+        // The lookup table holds one id per entry plus control bytes.
+        let lookup = self.lookup.capacity() * (std::mem::size_of::<EntryId>() + 1);
+        per_entry + self.names.len() + self.folded.len() + lookup
+    }
+
     /// The total size of every entry, indexed by id: a file's own size, or
     /// the sum of all files below a folder. Dead slots are 0.
     pub fn folder_sizes(&self) -> Vec<u64> {
@@ -1025,5 +1052,16 @@ mod tests {
         ix.remove(deep);
         let sizes = ix.folder_sizes();
         assert_eq!(sizes[docs as usize], 30, "removed entries do not count");
+    }
+
+    #[test]
+    fn memory_grows_with_entries() {
+        let (mut ix, docs, _, _) = sample();
+        let before = ix.memory_bytes();
+        assert!(before > 0);
+        for i in 0..1000 {
+            ix.insert(docs, format!("file{i}").as_bytes(), Meta::file(1, 0));
+        }
+        assert!(ix.memory_bytes() > before + 1000 * 40);
     }
 }

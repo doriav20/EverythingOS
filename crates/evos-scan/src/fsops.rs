@@ -5,6 +5,9 @@
 //! resolution. The [`CacheMode`] controls attribute caching on network
 //! filesystems: listings use cached attributes the READDIR(PLUS) reply just
 //! populated, while change sweeps force a round trip to the server.
+//!
+//! Indexing only looks: directories are opened read-only with `O_NOATIME`,
+//! so listing them does not even update their access times.
 
 use std::ffi::OsStr;
 use std::io;
@@ -84,11 +87,13 @@ fn os_path(path: &[u8]) -> &Path {
 }
 
 fn open_dir(path: &[u8]) -> io::Result<OwnedFd> {
-    Ok(rustix::fs::open(
-        os_path(path),
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::empty(),
-    )?)
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    match rustix::fs::open(os_path(path), flags | OFlags::NOATIME, Mode::empty()) {
+        // O_NOATIME needs ownership or CAP_FOWNER: the daemon has it as
+        // root, an unprivileged caller may not.
+        Err(rustix::io::Errno::PERM) => Ok(rustix::fs::open(os_path(path), flags, Mode::empty())?),
+        result => Ok(result?),
+    }
 }
 
 /// Metadata plus the identity of the filesystem an entry lives on.
@@ -214,6 +219,28 @@ mod tests {
 
     fn bytes(p: &Path) -> Vec<u8> {
         p.as_os_str().as_bytes().to_vec()
+    }
+
+    #[test]
+    fn listing_does_not_touch_access_times() {
+        use rustix::fs::{utimensat, Timespec, Timestamps};
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("f"), b"x").unwrap();
+        // Old enough that relatime would update it on the next read.
+        let past = Timespec {
+            tv_sec: 1_000_000_000,
+            tv_nsec: 0,
+        };
+        let times = Timestamps {
+            last_access: past,
+            last_modification: past,
+        };
+        utimensat(CWD, tmp.path(), &times, AtFlags::empty()).unwrap();
+        let before = stat(&bytes(tmp.path()), CacheMode::AsStat).unwrap();
+        list_dir(&bytes(tmp.path()), CacheMode::AsStat).unwrap();
+        let after = stat(&bytes(tmp.path()), CacheMode::AsStat).unwrap();
+        assert_eq!(after.atime, before.atime, "listing changed the access time");
+        assert_eq!(after.mtime, before.mtime);
     }
 
     #[test]

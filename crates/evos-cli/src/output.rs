@@ -8,7 +8,6 @@ use evos_proto::{DaemonStatus, Row, VolumeStatistics};
 use serde::Serialize;
 
 use crate::es::Column;
-use crate::filelist;
 
 /// Output formats, as es names them.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -121,7 +120,7 @@ impl Style {
         match self.date_format {
             DateFormat::Local => local_time(ns).format("%Y-%m-%d %H:%M").to_string(),
             DateFormat::Iso => local_time(ns).format("%Y-%m-%dT%H:%M:%S").to_string(),
-            DateFormat::FileTime => filelist::to_filetime(ns).to_string(),
+            DateFormat::FileTime => evos_proto::efu::to_filetime(ns).to_string(),
             DateFormat::IsoUtc => Utc
                 .timestamp_opt(ns.div_euclid(1_000_000_000), 0)
                 .single()
@@ -207,7 +206,7 @@ impl<W: Write> Writer<W> {
         match self.style.format {
             Format::Csv if self.style.header => write!(self.out, "{}\r\n", titles.join(",")),
             Format::Tsv if self.style.header => writeln!(self.out, "{}", titles.join("\t")),
-            Format::Efu if self.style.header => write!(self.out, "{}\r\n", filelist::HEADER),
+            Format::Efu if self.style.header => write!(self.out, "{}\r\n", evos_proto::efu::HEADER),
             Format::M3u8 => writeln!(self.out, "#EXTM3U"),
             _ => Ok(()),
         }
@@ -231,7 +230,7 @@ impl<W: Write> Writer<W> {
                     }
                     let v = self.style.value(row, c);
                     if is_text_column(c) {
-                        filelist::write_quoted(&mut self.out, &v)?;
+                        evos_proto::efu::write_quoted(&mut self.out, &v)?;
                     } else {
                         self.out.write_all(&v)?;
                     }
@@ -257,7 +256,7 @@ impl<W: Write> Writer<W> {
                 self.out.write_all(&fields.join(&b'\t'))?;
                 self.out.write_all(b"\n")
             }
-            Format::Efu => filelist::write_row(&mut self.out, row),
+            Format::Efu => evos_proto::efu::write_row(&mut self.out, row),
             Format::M3u | Format::M3u8 => {
                 self.out.write_all(&row.path())?;
                 self.out.write_all(b"\n")

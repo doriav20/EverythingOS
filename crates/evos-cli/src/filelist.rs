@@ -1,9 +1,8 @@
-//! Everything file lists (`.efu`): CSV files of full paths with size,
-//! dates and attributes. `evos` writes them from search results and can
-//! search one directly without the daemon, e.g. a catalog of a drive that
-//! is not connected.
+//! Reading and searching Everything file lists (`.efu`) without the
+//! daemon, e.g. a catalog of a drive that is not connected. Writing them
+//! lives in [`evos_proto::efu`].
 
-use std::io::{self, Write};
+use std::io;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
@@ -13,73 +12,8 @@ use evos_core::sort::{sort_hits_with, SortSpec};
 use evos_core::store::mode;
 use evos_core::types::type_name;
 use evos_core::{EntryId, Index, Meta, ROOT};
+use evos_proto::efu::{from_filetime, ATTR_DIRECTORY, ATTR_READONLY};
 use evos_proto::Row;
-
-pub const HEADER: &str = "Filename,Size,Date Modified,Date Created,Attributes";
-
-/// 100 ns intervals between 1601-01-01 (FILETIME) and 1970-01-01.
-const FILETIME_UNIX: i64 = 116_444_736_000_000_000;
-
-const ATTR_READONLY: u32 = 0x1;
-const ATTR_HIDDEN: u32 = 0x2;
-const ATTR_DIRECTORY: u32 = 0x10;
-const ATTR_ARCHIVE: u32 = 0x20;
-
-pub fn to_filetime(ns: i64) -> i64 {
-    ns.div_euclid(100) + FILETIME_UNIX
-}
-
-pub fn from_filetime(ft: i64) -> i64 {
-    (ft - FILETIME_UNIX).saturating_mul(100)
-}
-
-/// Windows attribute bits of a row.
-pub fn attribute_bits(row: &Row) -> u32 {
-    let mut bits = if row.is_dir {
-        ATTR_DIRECTORY
-    } else {
-        ATTR_ARCHIVE
-    };
-    if row.attributes.contains('R') {
-        bits |= ATTR_READONLY;
-    }
-    if row.attributes.contains('H') {
-        bits |= ATTR_HIDDEN;
-    }
-    bits
-}
-
-/// Writes `field` as a CSV field, quoted.
-pub fn write_quoted(out: &mut impl Write, field: &[u8]) -> io::Result<()> {
-    out.write_all(b"\"")?;
-    for part in field.split_inclusive(|&b| b == b'"') {
-        out.write_all(part)?;
-        if part.last() == Some(&b'"') {
-            out.write_all(b"\"")?;
-        }
-    }
-    out.write_all(b"\"")
-}
-
-/// Writes one file list line (without the header).
-pub fn write_row(out: &mut impl Write, row: &Row) -> io::Result<()> {
-    write_quoted(out, &row.path())?;
-    let date = |ns: i64| {
-        if ns == 0 {
-            String::new()
-        } else {
-            to_filetime(ns).to_string()
-        }
-    };
-    let size = row.size.map(|s| s.to_string()).unwrap_or_default();
-    write!(
-        out,
-        ",{size},{},{},{}\r\n",
-        date(row.mtime),
-        date(row.created),
-        attribute_bits(row)
-    )
-}
 
 /// Splits CSV data into records of fields. Quoted fields may contain
 /// commas, doubled quotes and line breaks.
@@ -276,6 +210,7 @@ impl Extra for FolderSizes {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use evos_proto::efu::{write_row, HEADER};
 
     fn row(path: &str, is_dir: bool, size: Option<u64>) -> Row {
         let (folder, name) = path.rsplit_once('/').unwrap();
@@ -291,13 +226,6 @@ mod tests {
             attributes: if is_dir { "D" } else { "A" }.into(),
             ..Default::default()
         }
-    }
-
-    #[test]
-    fn filetime_roundtrip() {
-        let ns = 1_700_000_000_123_456_700;
-        assert_eq!(from_filetime(to_filetime(ns)), ns);
-        assert_eq!(to_filetime(0), FILETIME_UNIX);
     }
 
     #[test]

@@ -6,6 +6,7 @@
 //! matching response repeats; pushed events use id 0.
 
 mod client;
+pub mod efu;
 mod mounts;
 
 use serde::{Deserialize, Serialize};

@@ -496,6 +496,34 @@ impl Index {
         false
     }
 
+    /// The total size of every entry, indexed by id: a file's own size, or
+    /// the sum of all files below a folder. Dead slots are 0.
+    pub fn folder_sizes(&self) -> Vec<u64> {
+        // Breadth-first order puts every folder before its children, so a
+        // reverse pass sees each subtree complete before its parent.
+        let mut order = Vec::with_capacity(self.live);
+        order.push(ROOT);
+        let mut i = 0;
+        while i < order.len() {
+            let dir = order[i];
+            if self.is_dir(dir) {
+                order.extend(self.children(dir));
+            }
+            i += 1;
+        }
+        let mut totals = vec![0u64; self.len()];
+        for &id in order.iter().rev() {
+            if !self.is_dir(id) {
+                totals[id as usize] = self.size[id as usize];
+            }
+            if id != ROOT {
+                let parent = self.parent[id as usize] as usize;
+                totals[parent] = totals[parent].saturating_add(totals[id as usize]);
+            }
+        }
+        totals
+    }
+
     /// Reconciles the children of `dir` with a fresh directory listing.
     pub fn apply_listing(&mut self, dir: EntryId, listing: &[ListedEntry]) -> ListingOutcome {
         let mut outcome = ListingOutcome::default();
@@ -979,5 +1007,23 @@ mod tests {
         assert_eq!(ix.generation(), g);
         ix.set_meta(a, Meta::file(1, 1));
         assert!(ix.generation() > g);
+    }
+
+    #[test]
+    fn folder_sizes_sum_subtrees() {
+        let (mut ix, docs, a, _) = sample();
+        let deep = ix.insert(docs, b"deep", Meta::dir(0));
+        let c = ix.insert(deep, b"c.bin", Meta::file(100, 0));
+        let empty = ix.insert(ROOT, b"empty", Meta::dir(0));
+        let sizes = ix.folder_sizes();
+        assert_eq!(sizes[a as usize], 10);
+        assert_eq!(sizes[c as usize], 100);
+        assert_eq!(sizes[deep as usize], 100);
+        assert_eq!(sizes[docs as usize], 130);
+        assert_eq!(sizes[empty as usize], 0);
+        assert_eq!(sizes[ROOT as usize], 130);
+        ix.remove(deep);
+        let sizes = ix.folder_sizes();
+        assert_eq!(sizes[docs as usize], 30, "removed entries do not count");
     }
 }

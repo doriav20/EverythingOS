@@ -1,4 +1,5 @@
-# Development / CI / packaging image.
+# Development / CI / packaging image. Xvfb, xdotool and the AT-SPI
+# accessibility bus let the end-to-end tests drive the real GTK window.
 #
 # Based on Ubuntu 24.04 on purpose: binaries built here link against glibc
 # 2.39 and GTK 4.14 / libadwaita 1.5, so the resulting packages also run on
@@ -13,6 +14,7 @@ RUN apt-get update \
         libgtk-4-dev libadwaita-1-dev \
         cifs-utils nfs-common sshfs smbclient \
         iproute2 procps psmisc sudo \
+        xvfb xdotool xclip dbus-x11 at-spi2-core python3-gi gir1.2-atspi-2.0 \
     && rm -rf /var/lib/apt/lists/*
 
 ENV RUSTUP_HOME=/usr/local/rustup \

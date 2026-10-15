@@ -344,3 +344,50 @@ fn everything_columns_history_and_statistics() {
         .count();
     assert_eq!(snapshots, 1);
 }
+
+#[test]
+fn previews_read_indexed_regular_files_only() {
+    let Some(fx) = fixture() else {
+        eprintln!("skipping: cannot mount tmpfs here");
+        return;
+    };
+    let mut client = Client::connect(&fx.socket, "test").unwrap();
+    wait_indexed(&mut client, "report", 3);
+    std::os::unix::fs::symlink("/etc/hostname", fx.disk.join("photos/host-link")).unwrap();
+    wait_indexed(&mut client, "host-link", 1);
+    let disk = fx.disk.as_os_str().as_bytes().to_vec();
+    let path = |rel: &str| [disk.as_slice(), b"/", rel.as_bytes()].concat();
+
+    let pdf = fx.disk.join("docs/reports/q1 report.pdf");
+    assert!(Command::new("touch")
+        .args(["-a", "-d", "2001-01-01"])
+        .arg(&pdf)
+        .status()
+        .unwrap()
+        .success());
+    let atime = std::fs::metadata(&pdf).unwrap().accessed().unwrap();
+    let data = client
+        .read_file(&path("docs/reports/q1 report.pdf"), 100)
+        .unwrap();
+    assert_eq!(data.len(), 100, "limited");
+    assert_eq!(std::fs::metadata(&pdf).unwrap().accessed().unwrap(), atime);
+
+    let code = |r: Result<Vec<u8>, evos_proto::ClientError>| match r {
+        Err(evos_proto::ClientError::Server { code, .. }) => Some(code),
+        _ => None,
+    };
+    assert_eq!(
+        code(client.read_file(&path("docs"), 10)),
+        Some(ErrorCode::BadRequest)
+    );
+    assert_eq!(
+        code(client.read_file(b"/etc/hostname", 10)),
+        Some(ErrorCode::NotFound),
+        "only indexed files"
+    );
+    assert_eq!(
+        code(client.read_file(&path("photos/host-link"), 10)),
+        Some(ErrorCode::Failed),
+        "links are not followed"
+    );
+}

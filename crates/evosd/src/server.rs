@@ -263,6 +263,13 @@ async fn handle(
             .await;
             Response::Ok
         }
+        Request::ReadFile { path, limit } => {
+            let (d, caller) = (daemon.clone(), peer.caller.clone());
+            match blocking(move || read_file(&d, &caller, &path, limit)).await {
+                Ok(data) => Response::FileContent(data),
+                Err(f) => failure(f),
+            }
+        }
         Request::RunCount { path, change } => {
             let (history, uid) = (&daemon.history, peer.caller.uid);
             let info = match change {
@@ -603,6 +610,39 @@ fn fetch(
             }
         })
         .collect())
+}
+
+/// Largest file preview served.
+const MAX_READ: u32 = 16 << 20;
+
+/// The start of an indexed file, if the caller could read it themselves.
+fn read_file(
+    daemon: &Daemon,
+    caller: &Caller,
+    path: &[u8],
+    limit: u32,
+) -> Result<Vec<u8>, Failure> {
+    {
+        let handles = daemon.volumes.volumes();
+        let snap = Snapshot::take(&handles);
+        let (vol, id) = snap
+            .resolve(path)
+            .ok_or_else(|| (ErrorCode::NotFound, "not an indexed file".to_owned()))?;
+        let ix = &snap.guards[snap.position(vol).expect("resolved volume")].1;
+        if ix.is_dir(id) {
+            return Err((ErrorCode::BadRequest, "folders have no content".into()));
+        }
+        if !daemon.cfg.single_user && !caller.is_root() {
+            let visibility = Visibility::new(caller.clone(), &snap.volumes());
+            if !visibility.can_read(vol, ix, id) {
+                return Err((ErrorCode::PermissionDenied, "permission denied".into()));
+            }
+        }
+        // Read without holding the index locks: a slow share must not
+        // stall updates.
+    }
+    evos_core::props::read_bytes(path, limit.min(MAX_READ) as u64)
+        .map_err(|e| (ErrorCode::Failed, e.to_string()))
 }
 
 /// Totals per volume.

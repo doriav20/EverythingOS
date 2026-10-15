@@ -208,6 +208,17 @@ impl Client {
         }
     }
 
+    /// Up to `limit` bytes of an indexed file (see [`Request::ReadFile`]).
+    pub fn read_file(&mut self, path: &[u8], limit: u32) -> Result<Vec<u8>, ClientError> {
+        match self.call(Request::ReadFile {
+            path: path.to_vec(),
+            limit,
+        })? {
+            Response::FileContent(data) => Ok(data),
+            other => Err(unexpected(other)),
+        }
+    }
+
     /// Sends a request whose only success response is `Ok`.
     pub fn expect_ok(&mut self, request: Request) -> Result<(), ClientError> {
         match self.call(request)? {

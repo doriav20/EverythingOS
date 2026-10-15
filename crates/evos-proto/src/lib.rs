@@ -187,6 +187,13 @@ pub enum Request {
     Statistics,
     /// Writes every index snapshot to disk now.
     Save,
+    /// Up to `limit` bytes of an indexed file, for previews. The daemon
+    /// reads it without changing its access time, and only if the caller
+    /// could read it themselves.
+    ReadFile {
+        path: Vec<u8>,
+        limit: u32,
+    },
 }
 
 /// What a [`Request::RunCount`] does.
@@ -221,6 +228,7 @@ pub enum Response {
     Mounts(Vec<MountInfo>),
     RunCount(RunInfo),
     Statistics(Vec<VolumeStatistics>),
+    FileContent(Vec<u8>),
     Error {
         code: ErrorCode,
         message: String,

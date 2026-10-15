@@ -8,6 +8,9 @@
 
 use std::sync::atomic::{AtomicU16, Ordering};
 
+use std::borrow::Cow;
+
+use crate::fold::Normalize;
 use crate::store::{EntryId, Index, ROOT};
 
 /// Longest supported needle; longer needles exceed `PATH_MAX` anyway.
@@ -66,33 +69,29 @@ const UNKNOWN: u16 = u16::MAX;
 /// Per-volume memo of automaton states after each directory's path.
 pub(crate) struct PathMemo {
     states: Vec<AtomicU16>,
-    folded: bool,
+    norm: Normalize,
     root_state: u16,
     /// The root path is `/`, so children are not preceded by another `/`.
     root_is_slash: bool,
 }
 
 impl PathMemo {
-    pub fn new(dfa: &Dfa, index: &Index, folded: bool) -> Self {
+    pub fn new(dfa: &Dfa, index: &Index, norm: Normalize) -> Self {
         let root = index.root_path();
-        let root_bytes = if folded {
-            crate::fold::fold(root)
-        } else {
-            root.to_vec()
-        };
+        let root_bytes = crate::fold::normalize(root, &norm);
         PathMemo {
             states: (0..index.len()).map(|_| AtomicU16::new(UNKNOWN)).collect(),
-            folded,
+            norm,
             root_state: dfa.run(0, &root_bytes),
             root_is_slash: root == b"/",
         }
     }
 
-    fn name<'a>(&self, index: &'a Index, id: EntryId) -> &'a [u8] {
-        if self.folded {
-            index.folded_name(id)
+    fn name<'a>(&self, index: &'a Index, id: EntryId) -> Cow<'a, [u8]> {
+        if self.norm.is_folded() {
+            Cow::Borrowed(index.folded_name(id))
         } else {
-            index.name(id)
+            Cow::Owned(crate::fold::normalize(index.name(id), &self.norm))
         }
     }
 
@@ -109,7 +108,8 @@ impl PathMemo {
         self.dir_state(dfa, index, id)
     }
 
-    fn dir_state(&self, dfa: &Dfa, index: &Index, dir: EntryId) -> u16 {
+    /// State after reading the full path of the folder `dir`.
+    pub fn dir_state(&self, dfa: &Dfa, index: &Index, dir: EntryId) -> u16 {
         if dir == ROOT {
             return self.root_state;
         }
@@ -139,12 +139,13 @@ impl PathMemo {
     }
 
     fn step(&self, dfa: &Dfa, index: &Index, parent: EntryId, state: u16, id: EntryId) -> u16 {
-        let state = if parent == ROOT && self.root_is_slash {
+        // Separators count as punctuation for `ignorepunc:`.
+        let state = if (parent == ROOT && self.root_is_slash) || self.norm.ignore_punct {
             state
         } else {
             dfa.run(state, b"/")
         };
-        dfa.run(state, self.name(index, id))
+        dfa.run(state, &self.name(index, id))
     }
 }
 
@@ -183,7 +184,7 @@ mod tests {
                 "zzz",
             ] {
                 let dfa = Dfa::new(needle.as_bytes());
-                let memo = PathMemo::new(&dfa, &ix, true);
+                let memo = PathMemo::new(&dfa, &ix, Normalize::FOLDED);
                 for id in [a, b, f] {
                     let mut path = Vec::new();
                     ix.folded_path_into(id, &mut path);

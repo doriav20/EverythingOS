@@ -6,8 +6,10 @@
 use std::collections::BTreeSet;
 use std::sync::atomic::AtomicBool;
 
-use evos_core::fold::fold_str;
-use evos_core::query::{parse, Expr, Filter, Kind, ParseOptions, PatternKind, Target, TextMatch};
+use evos_core::fold::{normalize, normalize_into, Normalize};
+use evos_core::query::{
+    parse, Anchor, Expr, Filter, Kind, ParseOptions, PatternKind, Target, TextMatch,
+};
 use evos_core::search::Query;
 use evos_core::{persist, EntryId, Index, Meta, ROOT};
 use proptest::prelude::*;
@@ -31,7 +33,8 @@ enum Op {
 }
 
 fn name_strategy() -> impl Strategy<Value = String> {
-    proptest::string::string_regex("[aAbBé._]{1,5}").unwrap()
+    // Hebrew shin plus a combining shin dot (a diacritic) stress folding.
+    proptest::string::string_regex("[aAbBé._ ש\u{5C1}]{1,5}").unwrap()
 }
 
 fn op_strategy() -> impl Strategy<Value = Op> {
@@ -95,6 +98,19 @@ fn term_strategy() -> impl Strategy<Value = String> {
         Just("folder:".to_owned()),
         Just("file:".to_owned()),
         Just("empty:".to_owned()),
+        "[aAbBé]{1,2}".prop_map(|s| format!("diacritics:{s}")),
+        "[ab]{1,2}".prop_map(|s| format!("startwith:{s}")),
+        "[ab]{1,2}".prop_map(|s| format!("endwith:{s}")),
+        "[ab._]{1,4}".prop_map(|s| format!("wfn:{s}")),
+        "[ab]{1,2}".prop_map(|s| format!("ww:{s}")),
+        "[ab]{1,2}".prop_map(|s| format!("prefix:{s}")),
+        "[ab]{1,2}".prop_map(|s| format!("suffix:{s}")),
+        "[ab]{1,2}".prop_map(|s| format!("ignorepunc:{s}")),
+        "[ab]{1,2}".prop_map(|s| format!("stem:{s}")),
+        "[ab]{1,2}".prop_map(|s| format!("location:{s}")),
+        "[ab]".prop_map(|s| format!("**/{s}*")),
+        "[ab]".prop_map(|s| format!("/*/{s}*")),
+        Just("ש".to_owned()),
     ]
 }
 
@@ -121,7 +137,8 @@ fn reference(expr: &Expr, ix: &Index, id: EntryId) -> bool {
             Filter::Kind(Kind::File) => !ix.is_dir(id),
             Filter::Kind(Kind::Folder) => ix.is_dir(id),
             Filter::Ext(exts) => {
-                let name = String::from_utf8_lossy(ix.name(id)).to_lowercase();
+                // Extensions compare folded, like names (diacritics ignored).
+                let name = String::from_utf8(normalize(ix.name(id), &Normalize::FOLDED)).unwrap();
                 let ext = match name.rfind('.') {
                     Some(0) | None => String::new(),
                     Some(i) => name[i + 1..].to_owned(),
@@ -134,27 +151,71 @@ fn reference(expr: &Expr, ix: &Index, id: EntryId) -> bool {
     }
 }
 
+fn is_word(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
 fn text_reference(t: &TextMatch, ix: &Index, id: EntryId) -> bool {
+    let name = String::from_utf8(ix.name(id).to_vec()).unwrap();
     let raw = match t.target {
-        Target::Name => String::from_utf8(ix.name(id).to_vec()).unwrap(),
+        Target::Name => name,
+        Target::Stem => match name.rfind('.') {
+            Some(0) | None => name,
+            Some(dot) => name[..dot].to_owned(),
+        },
         Target::Path => String::from_utf8(ix.path(id)).unwrap(),
+        Target::Location => String::from_utf8(ix.path(ix.parent(id))).unwrap(),
     };
-    let (hay, pat) = if t.case_sensitive {
-        (raw, t.pattern.clone())
-    } else {
-        (fold_str(&raw), fold_str(&t.pattern))
+    let norm = Normalize {
+        case: t.case_sensitive,
+        diacritics: t.diacritics,
+        ignore_punct: t.ignore_punct,
+        ignore_ws: t.ignore_ws,
     };
+    let n = |s: &str| String::from_utf8(normalize(s.as_bytes(), &norm)).unwrap();
+    let hay = n(&raw);
     match t.kind {
-        PatternKind::Substring => hay.contains(&pat),
+        PatternKind::Substring => {
+            let pat = n(&t.pattern);
+            let word_start = t.whole_word || t.word_prefix;
+            let word_end = t.whole_word || t.word_suffix;
+            let ok = |pos: usize| {
+                (!word_start || hay[..pos].chars().last().is_none_or(|c| !is_word(c)))
+                    && (!word_end
+                        || hay[pos + pat.len()..]
+                            .chars()
+                            .next()
+                            .is_none_or(|c| !is_word(c)))
+            };
+            match t.anchor {
+                Anchor::Start => hay.starts_with(&pat) && ok(0),
+                Anchor::End => hay.ends_with(&pat) && ok(hay.len() - pat.len()),
+                Anchor::Whole => hay == pat,
+                Anchor::Anywhere => hay.match_indices(pat.as_str()).any(|(pos, _)| ok(pos)),
+            }
+        }
         PatternKind::Wildcard => {
-            let re: String = pat
-                .chars()
-                .map(|c| match c {
-                    '*' => ".*".to_owned(),
-                    '?' => ".".to_owned(),
-                    c => regex::escape(&c.to_string()),
-                })
-                .collect();
+            let mut pattern = Vec::new();
+            normalize_into(t.pattern.as_bytes(), &norm, &['*', '?'], &mut pattern);
+            let pat = String::from_utf8(pattern).unwrap();
+            let path = matches!(t.target, Target::Path | Target::Location);
+            let mut re = String::new();
+            let mut chars = pat.chars().peekable();
+            while let Some(c) = chars.next() {
+                match c {
+                    '*' if path && chars.peek() == Some(&'*') => {
+                        while chars.peek() == Some(&'*') {
+                            chars.next();
+                        }
+                        re.push_str(".*");
+                    }
+                    '*' if path => re.push_str("[^/]*"),
+                    '?' if path => re.push_str("[^/]"),
+                    '*' => re.push_str(".*"),
+                    '?' => re.push('.'),
+                    c => re.push_str(&regex::escape(&c.to_string())),
+                }
+            }
             Regex::new(&format!("(?s)^{re}$")).unwrap().is_match(&hay)
         }
         PatternKind::Regex => unreachable!("not generated"),

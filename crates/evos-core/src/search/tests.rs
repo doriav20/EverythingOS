@@ -126,8 +126,18 @@ fn path_substring() {
 #[test]
 fn path_wildcards_and_regex() {
     let ix = tree();
-    assert_eq!(names(&search(&ix, "*/src/*.rs")), vec!["lib.rs", "main.rs"]);
+    // As in Everything 1.5, `*` stays within one folder and `**` crosses them.
+    assert_eq!(
+        names(&search(&ix, "**/src/*.rs")),
+        vec!["lib.rs", "main.rs"]
+    );
+    assert!(search(&ix, "*/src/*.rs").is_empty());
+    assert_eq!(
+        names(&search(&ix, "/home/*/src/*.rs")),
+        vec!["lib.rs", "main.rs"]
+    );
     assert_eq!(names(&search(&ix, "/home/*/notes.txt")), vec!["notes.txt"]);
+    assert!(search(&ix, "/home/*.txt").is_empty());
     assert_eq!(
         names(&search(&ix, r#"path:regex:"alice/.*\.(txt|sh)$""#)),
         vec!["notes.txt", "run.sh"]

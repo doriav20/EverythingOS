@@ -1,7 +1,0 @@
-# Seeds for failure cases proptest has generated in the past. It is
-# automatically read and these particular cases re-run before any
-# novel cases are generated.
-#
-# It is recommended to check this file in to source control so that
-# everyone who runs the test benefits from these saved cases.
-cc 177c4e593ce997e6dd2d5a462177ab934c845a1a90aec4263836348f71a0750b # shrinks to ops = [Insert { parent: 0, name: "A", dir: true }, Insert { parent: 0, name: "a", dir: false }, Remove { target: 1683032976837582146 }, Insert { parent: 0, name: "B", dir: false }, Insert { parent: 0, name: "a", dir: true }, Insert { parent: 17262201421963583302, name: "é", dir: true }, Insert { parent: 3842582494278962875, name: "a", dir: false }, Remove { target: 15123823692122351780 }, Insert { parent: 0, name: "b", dir: false }, Remove { target: 976378463587925327 }, Rename { target: 748344916215373944, parent: 9812606566326669925, name: "é" }]

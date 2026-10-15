@@ -356,7 +356,7 @@ fn search(
         whole_word: options.whole_word,
         match_path: options.match_path,
         regex: options.regex,
-        now: None,
+        ..Default::default()
     };
     let query =
         Query::compile(&parse(query, &opts)).map_err(|e| (ErrorCode::BadQuery, e.to_string()))?;

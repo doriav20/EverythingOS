@@ -9,7 +9,7 @@ use std::cmp::Ordering;
 use hashbrown::HashMap;
 use rayon::prelude::*;
 
-use crate::search::Hit;
+use crate::search::{attributes_of, Extra, Hit, NoExtra};
 use crate::store::{extension, EntryId, Index};
 
 /// Column to sort results by.
@@ -22,6 +22,14 @@ pub enum SortKey {
     Size,
     Modified,
     Extension,
+    /// Type description ("PNG Image").
+    Type,
+    Created,
+    Accessed,
+    Attributes,
+    RecentlyChanged,
+    RunCount,
+    DateRun,
 }
 
 /// Sort column and direction.
@@ -56,6 +64,16 @@ impl<'a> Volumes<'a> {
 
 /// Sorts hits in place.
 pub fn sort_hits(hits: &mut [Hit], volumes: &[(u16, &Index)], spec: SortSpec) {
+    sort_hits_with(hits, volumes, spec, &NoExtra)
+}
+
+/// Sorts hits in place, with folder sizes and run history from `extra`.
+pub fn sort_hits_with(
+    hits: &mut [Hit],
+    volumes: &[(u16, &Index)],
+    spec: SortSpec,
+    extra: &dyn Extra,
+) {
     let vols = Volumes::new(volumes);
     let name = |h: &Hit| vols.get(h.vol).folded_name(h.id);
     let by_name = |a: &Hit, b: &Hit| {
@@ -71,19 +89,55 @@ pub fn sort_hits(hits: &mut [Hit], volumes: &[(u16, &Index)], spec: SortSpec) {
         SortKey::Size => hits.par_sort_unstable_by(|a, b| {
             let size = |h: &Hit| {
                 let ix = vols.get(h.vol);
-                // Folders have no size; keep them together before files.
+                // Folders without a known size sort before files.
                 if ix.is_dir(h.id) {
-                    None
+                    extra.folder_size(h.vol, h.id)
                 } else {
                     Some(ix.size(h.id))
                 }
             };
             dir(size(a).cmp(&size(b)).then_with(|| by_name(a, b)))
         }),
-        SortKey::Modified => hits.par_sort_unstable_by(|a, b| {
-            let mtime = |h: &Hit| vols.get(h.vol).mtime(h.id);
-            dir(mtime(a).cmp(&mtime(b)).then_with(|| by_name(a, b)))
+        SortKey::Modified
+        | SortKey::Created
+        | SortKey::Accessed
+        | SortKey::RecentlyChanged
+        | SortKey::RunCount
+        | SortKey::DateRun => hits.par_sort_unstable_by(|a, b| {
+            let value = |h: &Hit| {
+                let ix = vols.get(h.vol);
+                match spec.key {
+                    SortKey::Modified => ix.mtime(h.id),
+                    SortKey::Created => ix.btime(h.id),
+                    SortKey::Accessed => ix.atime(h.id),
+                    SortKey::RecentlyChanged => ix.changed(h.id),
+                    SortKey::RunCount => extra.run_info(h.vol, h.id).count as i64,
+                    _ => extra.run_info(h.vol, h.id).last,
+                }
+            };
+            dir(value(a).cmp(&value(b)).then_with(|| by_name(a, b)))
         }),
+        SortKey::Type | SortKey::Attributes => {
+            let text = |h: &Hit| {
+                let ix = vols.get(h.vol);
+                if spec.key == SortKey::Type {
+                    crate::types::type_name(
+                        ix.name(h.id),
+                        ix.is_dir(h.id),
+                        ix.mode(h.id) & 0o111 != 0,
+                    )
+                } else {
+                    attributes_of(ix, h.id)
+                }
+            };
+            let mut keyed: Vec<(String, Hit)> = hits.par_iter().map(|h| (text(h), *h)).collect();
+            keyed.par_sort_unstable_by(|(ka, a), (kb, b)| {
+                dir(ka.cmp(kb).then_with(|| by_name(a, b)))
+            });
+            for (dst, (_, hit)) in hits.iter_mut().zip(keyed) {
+                *dst = hit;
+            }
+        }
         SortKey::Extension => hits.par_sort_unstable_by(|a, b| {
             let ext = |h: &Hit| {
                 let ix = vols.get(h.vol);

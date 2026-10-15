@@ -84,6 +84,14 @@ fn read_term(chars: &[char], start: usize) -> (RawTerm, usize) {
                 unquoted_prefix.get_or_insert(text.len());
             }
             c if c.is_whitespace() || c == '|' => break,
+            '<' if text.ends_with(':') && starts_value_group(chars, i) => {
+                // `content:<abc 123>`, `size:<1mb|>1gb>`: a grouped function
+                // value, kept verbatim (spaces included) for the parser.
+                let end = group_end(chars, i).expect("checked by starts_value_group");
+                text.extend(&chars[i..=end]);
+                i = end + 1;
+                continue;
+            }
             '<' | '>' => {
                 // `size:>10mb`, `dm:<=2024`: operator right after the colon
                 // (or another operator) belongs to the function value.
@@ -112,9 +120,58 @@ fn read_term(chars: &[char], start: usize) -> (RawTerm, usize) {
     )
 }
 
+/// Index of the `>` closing the group opened at `open`, if any.
+fn group_end(chars: &[char], open: usize) -> Option<usize> {
+    let mut depth = 0;
+    let mut in_quotes = false;
+    for (i, &c) in chars.iter().enumerate().skip(open) {
+        match c {
+            '"' => in_quotes = !in_quotes,
+            '<' if !in_quotes => depth += 1,
+            '>' if !in_quotes => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Does the `<` at `i` (right after a function colon) open a value group
+/// rather than a comparison like `<5mb`, `<=2024` or `<today`?
+fn starts_value_group(chars: &[char], i: usize) -> bool {
+    let Some(&next) = chars.get(i + 1) else {
+        return false;
+    };
+    let comparison = matches!(next, '=' | '<' | '>' | '!');
+    if comparison {
+        return false;
+    }
+    // A group needs its closing bracket, and must contain more than one
+    // value (space or `|`) to be distinguishable from `dm:<today`.
+    group_end(chars, i).is_some_and(|end| chars[i + 1..end].iter().any(|c| *c == ' ' || *c == '|'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grouped_function_values() {
+        assert_eq!(
+            tokenize("content:<abc 123> x"),
+            vec![term("content:<abc 123>"), term("x")]
+        );
+        assert_eq!(tokenize("size:<tiny|huge>"), vec![term("size:<tiny|huge>")]);
+        assert_eq!(tokenize("dm:<today"), vec![term("dm:<today")]);
+        assert_eq!(
+            tokenize("<dm:<today>"),
+            vec![Token::Open, term("dm:<today"), Token::Close]
+        );
+    }
 
     fn term(text: &str) -> Token {
         Token::Term(RawTerm {

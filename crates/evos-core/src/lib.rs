@@ -5,10 +5,12 @@
 pub mod fold;
 pub mod perm;
 pub mod persist;
+pub mod props;
 pub mod query;
 pub mod search;
 pub mod sort;
 pub mod store;
+pub mod types;
 pub mod wildcard;
 
 pub use store::{EntryId, Index, ListedEntry, ListingOutcome, Meta, NO_ENTRY, ROOT};

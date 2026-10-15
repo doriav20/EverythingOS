@@ -11,6 +11,8 @@ authors.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 crc32fast = "1"
 hashbrown = "0.15"
+imagesize = "0.13"
+lofty = "0.22"
 memchr = "2"
 rayon = "1"
 regex = "1"

@@ -8,8 +8,20 @@ use std::time::Duration;
 
 use crate::{
     decode_body, encode_frame, DaemonStatus, Envelope, ErrorCode, Event, MountInfo, Request,
-    Response, Row, SearchOptions, Sort, MAX_FRAME, PROTOCOL_VERSION,
+    Response, Row, RunChange, RunInfo, SearchOptions, Sort, VolumeStatistics, MAX_FRAME,
+    PROTOCOL_VERSION,
 };
+
+/// The outcome of [`Client::search`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchResult {
+    /// Id of the result set kept on the server.
+    pub id: u32,
+    pub total: u64,
+    pub elapsed_us: u64,
+    /// Literal terms to highlight in names and paths.
+    pub highlight: Vec<String>,
+}
 
 /// Error talking to the daemon.
 #[derive(Debug, thiserror::Error)]
@@ -114,19 +126,29 @@ impl Client {
         decode_body(&body).map_err(|e| ClientError::Protocol(e.to_string()))
     }
 
-    /// Runs a search. Returns the result id and total number of hits.
+    /// Runs a search; the results stay on the server for [`Client::fetch`].
     pub fn search(
         &mut self,
         query: &str,
         options: SearchOptions,
         sort: Sort,
-    ) -> Result<(u32, u64), ClientError> {
+    ) -> Result<SearchResult, ClientError> {
         match self.call(Request::Search {
             query: query.into(),
             options,
             sort,
         })? {
-            Response::SearchDone { result, total, .. } => Ok((result, total)),
+            Response::SearchDone {
+                result,
+                total,
+                elapsed_us,
+                highlight,
+            } => Ok(SearchResult {
+                id: result,
+                total,
+                elapsed_us,
+                highlight,
+            }),
             other => Err(unexpected(other)),
         }
     }
@@ -166,6 +188,24 @@ impl Client {
 
     pub fn subscribe(&mut self) -> Result<(), ClientError> {
         self.expect_ok(Request::Subscribe)
+    }
+
+    /// Reads or changes the run history of a path.
+    pub fn run_count(&mut self, path: &[u8], change: RunChange) -> Result<RunInfo, ClientError> {
+        match self.call(Request::RunCount {
+            path: path.to_vec(),
+            change,
+        })? {
+            Response::RunCount(info) => Ok(info),
+            other => Err(unexpected(other)),
+        }
+    }
+
+    pub fn statistics(&mut self) -> Result<Vec<VolumeStatistics>, ClientError> {
+        match self.call(Request::Statistics)? {
+            Response::Statistics(s) => Ok(s),
+            other => Err(unexpected(other)),
+        }
     }
 
     /// Sends a request whose only success response is `Ok`.
@@ -230,6 +270,7 @@ mod tests {
                     result: 3,
                     total: 42,
                     elapsed_us: 1,
+                    highlight: vec!["x".into()],
                 },
             ],
             Request::Fetch { .. } => {
@@ -245,7 +286,12 @@ mod tests {
         assert_eq!(
             c.search("x", SearchOptions::default(), Sort::default())
                 .unwrap(),
-            (3, 42)
+            SearchResult {
+                id: 3,
+                total: 42,
+                elapsed_us: 1,
+                highlight: vec!["x".into()],
+            }
         );
         assert_eq!(
             c.next_event().unwrap(),

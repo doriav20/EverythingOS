@@ -190,7 +190,7 @@ impl Ui {
         let ui = self.clone();
         self.backend.call_search(
             generation,
-            move |c| c.search(&query, options, sort),
+            move |c| c.search(&query, options, sort).map(|r| (r.id, r.total)),
             move |result| match result {
                 Ok((result, total)) => {
                     ui.state.borrow_mut().last_search = Some((Instant::now(), started.elapsed()));

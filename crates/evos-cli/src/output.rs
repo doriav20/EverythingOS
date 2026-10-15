@@ -156,8 +156,7 @@ mod tests {
             folder: b"/home/me".to_vec(),
             is_dir: false,
             size: Some(2048),
-            mtime: 0,
-            offline: false,
+            ..Default::default()
         }
     }
 

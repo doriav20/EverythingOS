@@ -11,6 +11,7 @@ use evos_mount::MountManager;
 use evos_scan::mountinfo::MountWatcher;
 
 use crate::config::Config;
+use crate::history::RunHistory;
 use crate::server::{serve, spawn_event_ticker, Daemon};
 use crate::volumes::VolumeManager;
 
@@ -33,6 +34,7 @@ pub fn run(cfg: Config) -> Result<(), String> {
             .map_err(|e| format!("cannot load mounts: {e}"))?,
     );
     let volumes = Arc::new(VolumeManager::new(cfg.clone(), mounts.clone()));
+    let history = Arc::new(RunHistory::load(cfg.state_dir.join("run-history")));
 
     // Mount managed shares first so they are indexed from the start.
     mounts.supervise();
@@ -52,6 +54,10 @@ pub fn run(cfg: Config) -> Result<(), String> {
             let volumes = volumes.clone();
             move || volumes.save_snapshots(false)
         }),
+        spawn_loop("evos-history", stop.clone(), Duration::from_secs(30), {
+            let history = history.clone();
+            move || history.save()
+        }),
         spawn_mount_watcher(stop.clone(), volumes.clone()),
     ];
 
@@ -67,6 +73,7 @@ pub fn run(cfg: Config) -> Result<(), String> {
             cfg: cfg.clone(),
             volumes: volumes.clone(),
             mounts: mounts.clone(),
+            history: history.clone(),
             events,
         });
         spawn_event_ticker(daemon.clone());
@@ -87,6 +94,7 @@ pub fn run(cfg: Config) -> Result<(), String> {
         let _ = t.join();
     }
     volumes.shutdown();
+    history.save();
     let _ = std::fs::remove_file(&cfg.socket);
     runtime.shutdown_timeout(Duration::from_secs(2));
     result

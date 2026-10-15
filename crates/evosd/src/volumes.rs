@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use evos_core::{persist, Index, Meta};
 use evos_mount::MountManager;
@@ -36,9 +36,43 @@ pub struct VolumeHandle {
     snapshot: PathBuf,
     saved_generation: AtomicU64,
     thread: Mutex<Option<JoinHandle<()>>>,
+    sizes: Mutex<Option<SizeCache>>,
 }
 
+/// Folder sizes computed from one state of an index.
+struct SizeCache {
+    epoch: u64,
+    generation: u64,
+    at: Instant,
+    sizes: Arc<Vec<u64>>,
+}
+
+/// While an index keeps changing, folder sizes are recomputed at most this
+/// often.
+const SIZE_REFRESH: Duration = Duration::from_secs(3);
+
 impl VolumeHandle {
+    /// Total sizes of every folder (see [`Index::folder_sizes`]), cached.
+    /// Slightly stale sizes are fine for display: ids only change when the
+    /// epoch does, so a cached vector never describes the wrong entry.
+    pub fn folder_sizes(&self, index: &Index) -> Arc<Vec<u64>> {
+        let mut cache = self.sizes.lock();
+        if let Some(c) = cache.as_ref() {
+            let fresh = c.generation == index.generation() || c.at.elapsed() < SIZE_REFRESH;
+            if c.epoch == index.epoch() && fresh {
+                return c.sizes.clone();
+            }
+        }
+        let sizes = Arc::new(index.folder_sizes());
+        *cache = Some(SizeCache {
+            epoch: index.epoch(),
+            generation: index.generation(),
+            at: Instant::now(),
+            sizes: sizes.clone(),
+        });
+        sizes
+    }
+
     fn snapshot_extra(&self) -> Vec<u8> {
         SnapshotMeta {
             source: self.source.clone(),
@@ -265,6 +299,7 @@ impl VolumeManager {
             snapshot: self.cfg.state_dir.join(snapshot_name(&w.root)),
             saved_generation: AtomicU64::new(u64::MAX),
             thread: Mutex::new(None),
+            sizes: Mutex::new(None),
         });
         tracing::info!(
             id,

@@ -10,11 +10,11 @@ mod mounts;
 
 use serde::{Deserialize, Serialize};
 
-pub use client::{Client, ClientError};
+pub use client::{Client, ClientError, SearchResult};
 pub use mounts::{Credentials, IndexSettings, MountInfo, MountKind, MountSpec};
 
 /// Bumped on incompatible protocol changes.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Where the daemon listens by default.
 pub const DEFAULT_SOCKET: &str = "/run/evos/evosd.sock";
@@ -29,9 +29,17 @@ pub struct SearchOptions {
     pub whole_word: bool,
     pub match_path: bool,
     pub regex: bool,
+    /// Distinguish "é" from "e" (off: diacritics are ignored).
+    pub match_diacritics: bool,
+    /// Terms must match at the start of a word.
+    pub match_prefix: bool,
+    /// Terms must match at the end of a word.
+    pub match_suffix: bool,
+    pub ignore_punctuation: bool,
+    pub ignore_white_space: bool,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SortKey {
     #[default]
     Name,
@@ -39,6 +47,69 @@ pub enum SortKey {
     Size,
     Modified,
     Extension,
+    /// Type description ("PNG Image").
+    Type,
+    Created,
+    Accessed,
+    Attributes,
+    RecentlyChanged,
+    RunCount,
+    DateRun,
+}
+
+impl SortKey {
+    pub const ALL: [SortKey; 12] = [
+        SortKey::Name,
+        SortKey::Path,
+        SortKey::Size,
+        SortKey::Modified,
+        SortKey::Extension,
+        SortKey::Type,
+        SortKey::Created,
+        SortKey::Accessed,
+        SortKey::Attributes,
+        SortKey::RecentlyChanged,
+        SortKey::RunCount,
+        SortKey::DateRun,
+    ];
+
+    /// The name used on command lines and in settings ("date-modified").
+    pub fn name(self) -> &'static str {
+        match self {
+            SortKey::Name => "name",
+            SortKey::Path => "path",
+            SortKey::Size => "size",
+            SortKey::Modified => "date-modified",
+            SortKey::Extension => "extension",
+            SortKey::Type => "type",
+            SortKey::Created => "date-created",
+            SortKey::Accessed => "date-accessed",
+            SortKey::Attributes => "attributes",
+            SortKey::RecentlyChanged => "date-recently-changed",
+            SortKey::RunCount => "run-count",
+            SortKey::DateRun => "date-run",
+        }
+    }
+
+    /// Parses a sort name, accepting Everything's short forms (dm, dc, ...).
+    pub fn parse(s: &str) -> Option<SortKey> {
+        let s = s.to_ascii_lowercase().replace('_', "-");
+        Some(match s.as_str() {
+            "name" | "n" => SortKey::Name,
+            "path" | "p" | "full-path" | "full-path-and-name" => SortKey::Path,
+            "size" | "s" => SortKey::Size,
+            "date-modified" | "dm" | "modified" | "mtime" | "d" => SortKey::Modified,
+            "extension" | "ext" | "e" => SortKey::Extension,
+            "type" | "t" => SortKey::Type,
+            "date-created" | "dc" | "created" => SortKey::Created,
+            "date-accessed" | "da" | "accessed" => SortKey::Accessed,
+            "attributes" | "attribs" | "attrib" | "a" => SortKey::Attributes,
+            "date-recently-changed" | "rc" | "recently-changed" => SortKey::RecentlyChanged,
+            "run-count" | "runcount" => SortKey::RunCount,
+            "date-run" | "dr" => SortKey::DateRun,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -105,6 +176,25 @@ pub enum Request {
         spec: MountSpec,
         credentials: Option<Credentials>,
     },
+    /// Reads or changes the caller's run history for a path (how often
+    /// and when it was opened from EverythingOS).
+    RunCount {
+        path: Vec<u8>,
+        change: RunChange,
+    },
+    /// File, folder and size totals of every volume.
+    Statistics,
+    /// Writes every index snapshot to disk now.
+    Save,
+}
+
+/// What a [`Request::RunCount`] does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RunChange {
+    Get,
+    /// The path was just opened: count it and set its run date.
+    Opened,
+    Set(u32),
 }
 
 /// A response or pushed event.
@@ -118,6 +208,8 @@ pub enum Response {
         result: u32,
         total: u64,
         elapsed_us: u64,
+        /// Literal terms to highlight in names and paths.
+        highlight: Vec<String>,
     },
     Rows {
         offset: u32,
@@ -126,6 +218,8 @@ pub enum Response {
     Ok,
     Status(DaemonStatus),
     Mounts(Vec<MountInfo>),
+    RunCount(RunInfo),
+    Statistics(Vec<VolumeStatistics>),
     Error {
         code: ErrorCode,
         message: String,
@@ -152,17 +246,31 @@ pub enum Event {
     StatusChanged,
 }
 
-/// One result row.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// One result row. Times are Unix nanoseconds; 0 means unknown.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Row {
+    /// The entry's name; for the root of a volume, its full path.
     pub name: Vec<u8>,
-    /// Absolute path of the containing folder.
+    /// Absolute path of the containing folder; empty for volume roots.
     pub folder: Vec<u8>,
     pub is_dir: bool,
-    /// Size in bytes; `None` for folders.
+    /// Size in bytes; for folders the total size of their contents, when
+    /// known.
     pub size: Option<u64>,
-    /// Modification time in Unix nanoseconds.
     pub mtime: i64,
+    /// Birth time, where the filesystem records it.
+    pub created: i64,
+    pub accessed: i64,
+    /// When the index last saw the entry appear or change.
+    pub changed: i64,
+    /// Everything-style attribute letters: R(ead-only), H(idden),
+    /// D(irectory), A(rchive: any file), L(ink).
+    pub attributes: String,
+    /// Type description ("PNG Image", "Folder").
+    pub type_name: String,
+    /// How often the caller opened it from EverythingOS, and when last.
+    pub run_count: u32,
+    pub date_run: i64,
     /// The row lives on a network share that is currently offline.
     pub offline: bool,
 }
@@ -170,6 +278,9 @@ pub struct Row {
 impl Row {
     /// Absolute path of the entry.
     pub fn path(&self) -> Vec<u8> {
+        if self.folder.is_empty() {
+            return self.name.clone();
+        }
         let mut p = self.folder.clone();
         if p.last() != Some(&b'/') {
             p.push(b'/');
@@ -177,6 +288,29 @@ impl Row {
         p.extend_from_slice(&self.name);
         p
     }
+}
+
+/// Run history of one path.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunInfo {
+    pub count: u32,
+    /// Unix nanoseconds; 0 if never run.
+    pub last: i64,
+}
+
+/// Totals of one volume, for the statistics view.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VolumeStatistics {
+    pub id: u16,
+    pub root: Vec<u8>,
+    pub fs_type: String,
+    pub network: bool,
+    pub files: u64,
+    pub folders: u64,
+    /// Sum of all file sizes in bytes.
+    pub total_size: u64,
+    /// Approximate memory the index uses, in bytes.
+    pub index_bytes: u64,
 }
 
 /// Daemon-wide status.
@@ -268,7 +402,8 @@ mod tests {
             is_dir: false,
             size: Some(3),
             mtime: -5,
-            offline: false,
+            type_name: "TXT File".into(),
+            ..Default::default()
         };
         assert_eq!(row.path(), b"/caf\xe9.txt");
         let frame = encode_frame(&Response::Rows {
@@ -284,5 +419,25 @@ mod tests {
                 rows: vec![row]
             }
         );
+    }
+
+    #[test]
+    fn volume_roots_are_their_own_path() {
+        let root = Row {
+            name: b"/mnt/nas".to_vec(),
+            is_dir: true,
+            ..Default::default()
+        };
+        assert_eq!(root.path(), b"/mnt/nas");
+    }
+
+    #[test]
+    fn sort_names_roundtrip() {
+        for key in SortKey::ALL {
+            assert_eq!(SortKey::parse(key.name()), Some(key));
+        }
+        assert_eq!(SortKey::parse("DM"), Some(SortKey::Modified));
+        assert_eq!(SortKey::parse("run_count"), Some(SortKey::RunCount));
+        assert_eq!(SortKey::parse("nope"), None);
     }
 }

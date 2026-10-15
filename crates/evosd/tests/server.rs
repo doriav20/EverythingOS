@@ -6,10 +6,18 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use evos_mount::MountManager;
-use evos_proto::{Client, ErrorCode, Request, SearchOptions, Sort, SortKey};
+use evos_proto::{
+    Client, ErrorCode, Request, RunChange, SearchOptions, SearchResult, Sort, SortKey,
+};
 use evosd::config::{Config, LocalConfig};
+use evosd::history::RunHistory;
 use evosd::server::{serve, Daemon};
 use evosd::volumes::VolumeManager;
+
+/// Each fixture indexes only its own tmpfs, chosen by skipping every other
+/// mount; a fixture created concurrently would see the other's tmpfs, so
+/// tests using fixtures run one at a time.
+static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 struct Fixture {
     _tmp: tempfile::TempDir,
@@ -17,6 +25,7 @@ struct Fixture {
     socket: std::path::PathBuf,
     daemon: Arc<Daemon>,
     _rt: tokio::runtime::Runtime,
+    _serial: std::sync::MutexGuard<'static, ()>,
 }
 
 impl Drop for Fixture {
@@ -27,6 +36,7 @@ impl Drop for Fixture {
 }
 
 fn fixture() -> Option<Fixture> {
+    let serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let tmp = tempfile::tempdir().unwrap();
     let disk = tmp.path().join("disk");
     std::fs::create_dir_all(&disk).unwrap();
@@ -44,6 +54,7 @@ fn fixture() -> Option<Fixture> {
     std::fs::write(disk.join("docs/reports/q1 report.pdf"), vec![0u8; 3000]).unwrap();
     std::fs::write(disk.join("docs/reports/q2 report.pdf"), vec![0u8; 1000]).unwrap();
     std::fs::write(disk.join("photos/cat.jpg"), vec![0u8; 2000]).unwrap();
+    std::fs::write(disk.join("photos/מסמך חשוב.txt"), "שלום עולם").unwrap();
 
     let disk_bytes = disk.as_os_str().as_bytes().to_vec();
     let skip = evos_scan::mountinfo::read_mounts()
@@ -67,10 +78,12 @@ fn fixture() -> Option<Fixture> {
     let volumes = Arc::new(VolumeManager::new(cfg.clone(), mounts.clone()));
     volumes.sync();
     let (events, _) = tokio::sync::broadcast::channel(16);
+    let history = Arc::new(RunHistory::load(cfg.state_dir.join("run-history")));
     let daemon = Arc::new(Daemon {
         cfg,
         volumes,
         mounts,
+        history,
         events,
     });
 
@@ -89,13 +102,16 @@ fn fixture() -> Option<Fixture> {
         socket,
         daemon,
         _rt: rt,
+        _serial: serial,
     })
 }
 
 fn wait_indexed(client: &mut Client, query: &str, expected: u64) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let (result, total) = client
+        let SearchResult {
+            id: result, total, ..
+        } = client
             .search(query, SearchOptions::default(), Sort::default())
             .unwrap();
         client.release(result).unwrap();
@@ -133,7 +149,9 @@ fn search_fetch_sort_and_live_updates() {
         key: SortKey::Size,
         descending: true,
     };
-    let (result, total) = client
+    let SearchResult {
+        id: result, total, ..
+    } = client
         .search("ext:pdf|ext:jpg", SearchOptions::default(), by_size)
         .unwrap();
     assert_eq!(total, 3);
@@ -217,4 +235,112 @@ fn rejects_garbage_frames() {
             ..
         }
     ));
+}
+
+fn search(client: &mut Client, query: &str, sort: Sort) -> (SearchResult, Vec<evos_proto::Row>) {
+    let found = client
+        .search(query, SearchOptions::default(), sort)
+        .unwrap();
+    let rows = client.fetch(found.id, 0, 100).unwrap();
+    (found, rows)
+}
+
+#[test]
+fn everything_columns_history_and_statistics() {
+    let Some(fx) = fixture() else {
+        eprintln!("skipping: cannot mount tmpfs here");
+        return;
+    };
+    let mut client = Client::connect(&fx.socket, "test").unwrap();
+    wait_indexed(&mut client, "report", 3);
+    let disk = fx.disk.as_os_str().as_bytes().to_vec();
+
+    // Columns: type, attributes, dates; folders carry their total size.
+    let (found, rows) = search(&mut client, "q1", Sort::default());
+    assert_eq!(found.total, 1);
+    assert_eq!(found.highlight, ["q1"]);
+    let q1 = &rows[0];
+    assert_eq!(q1.type_name, "PDF Document");
+    assert_eq!(q1.attributes, "A");
+    assert!(q1.mtime > 0 && q1.accessed > 0 && q1.changed > 0);
+    let (_, rows) = search(&mut client, "folder: reports", Sort::default());
+    assert_eq!(rows[0].size, Some(4000), "q1 + q2");
+    assert_eq!(rows[0].type_name, "Folder");
+    assert_eq!(rows[0].attributes, "D");
+    let (found, _) = search(&mut client, "folder: size:>3kb", Sort::default());
+    assert_eq!(found.total, 2, "reports and docs, by folder size");
+
+    // count: keeps the first results in sort order; root: lists the volume.
+    let by_size = Sort {
+        key: SortKey::Size,
+        descending: true,
+    };
+    let (found, rows) = search(&mut client, "ext:pdf;jpg count:2", by_size);
+    assert_eq!(found.total, 2);
+    assert_eq!(rows[0].name, b"q1 report.pdf");
+    let (found, rows) = search(&mut client, "root:", Sort::default());
+    assert_eq!(found.total, 1);
+    assert_eq!(rows[0].path(), disk);
+    assert!(rows[0].folder.is_empty() && rows[0].is_dir);
+
+    // Hebrew names and content, with or without niqqud in the query.
+    let (found, rows) = search(&mut client, "מִסְמָךְ", Sort::default());
+    assert_eq!(found.total, 1, "niqqud in the query is ignored");
+    assert_eq!(rows[0].name, "מסמך חשוב.txt".as_bytes());
+    assert_eq!(rows[0].type_name, "Text Document");
+    let note = fx.disk.join("photos/מסמך חשוב.txt");
+    // Searching content must not even change the access time.
+    assert!(Command::new("touch")
+        .args(["-a", "-d", "2001-01-01"])
+        .arg(&note)
+        .status()
+        .unwrap()
+        .success());
+    let atime = std::fs::metadata(&note).unwrap().accessed().unwrap();
+    let (found, _) = search(&mut client, "content:שלום", Sort::default());
+    assert_eq!(found.total, 1);
+    let (found, _) = search(&mut client, "content:goodbye", Sort::default());
+    assert_eq!(found.total, 0);
+    assert_eq!(
+        std::fs::metadata(&note).unwrap().accessed().unwrap(),
+        atime,
+        "content search changed the access time"
+    );
+
+    // Run history: counted per user, shown in rows, searchable, sortable.
+    let cat = [disk.as_slice(), b"/photos/cat.jpg"].concat();
+    assert_eq!(client.run_count(&cat, RunChange::Opened).unwrap().count, 1);
+    let info = client.run_count(&cat, RunChange::Opened).unwrap();
+    assert_eq!(info.count, 2);
+    assert!(info.last > 0);
+    assert_eq!(client.run_count(&cat, RunChange::Get).unwrap(), info);
+    let (found, rows) = search(&mut client, "runcount:2", Sort::default());
+    assert_eq!(found.total, 1);
+    assert_eq!((rows[0].run_count, rows[0].date_run), (2, info.last));
+    let (found, _) = search(&mut client, "dr:today", Sort::default());
+    assert_eq!(found.total, 1);
+    let by_runs = Sort {
+        key: SortKey::RunCount,
+        descending: true,
+    };
+    let (_, rows) = search(&mut client, "file:", by_runs);
+    assert_eq!(rows[0].name, b"cat.jpg");
+    client.run_count(&cat, RunChange::Set(0)).unwrap();
+    let (found, _) = search(&mut client, "runcount:>0", Sort::default());
+    assert_eq!(found.total, 0);
+
+    // Statistics and saving.
+    let stats = client.statistics().unwrap();
+    assert_eq!(stats.len(), 1);
+    let s = &stats[0];
+    assert_eq!((s.files, s.folders), (4, 3));
+    assert_eq!(s.total_size, 6000 + "שלום עולם".len() as u64);
+    assert!(s.index_bytes > 0);
+    client.expect_ok(Request::Save).unwrap();
+    assert!(fx.daemon.cfg.state_dir.join("run-history").exists());
+    let snapshots = std::fs::read_dir(&fx.daemon.cfg.state_dir)
+        .unwrap()
+        .filter(|e| e.as_ref().unwrap().path().extension() == Some("idx".as_ref()))
+        .count();
+    assert_eq!(snapshots, 1);
 }

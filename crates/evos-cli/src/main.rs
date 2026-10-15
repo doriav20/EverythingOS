@@ -163,8 +163,10 @@ fn search(socket: &PathBuf, args: SearchArgs) -> Result<ExitCode, Failure> {
         whole_word: args.whole_word,
         match_path: args.match_path,
         regex: args.regex,
+        ..Default::default()
     };
-    let (result, total) = client.search(&args.query.join(" "), options, sort)?;
+    let found = client.search(&args.query.join(" "), options, sort)?;
+    let (result, total) = (found.id, found.total);
     let end = args.max.map_or(total, |m| (args.offset + m).min(total));
     if args.count {
         println!("{}", end.saturating_sub(args.offset));

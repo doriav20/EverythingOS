@@ -191,8 +191,7 @@ mod tests {
             folder: b"/d".to_vec(),
             is_dir: false,
             size: Some(i as u64),
-            mtime: 0,
-            offline: false,
+            ..Default::default()
         }
     }
 

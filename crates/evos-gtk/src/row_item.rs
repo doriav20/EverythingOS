@@ -80,6 +80,10 @@ impl Default for RowItem {
     }
 }
 
+/// LEFT-TO-RIGHT MARK: sets the direction of a label that starts with a
+/// right-to-left letter.
+const LRM: char = '\u{200E}';
+
 /// Escapes `text` for Pango markup with the search terms in bold.
 pub fn highlight_markup(text: &str, terms: &[String]) -> String {
     let mut out = String::with_capacity(text.len() + 16);
@@ -122,8 +126,11 @@ impl RowItem {
             Some(dot) if dot > 0 && !row.is_dir => name[dot + 1..].to_owned(),
             _ => String::new(),
         };
-        self.set_name_markup(highlight_markup(&name, terms));
-        self.set_folder_markup(highlight_markup(&folder, terms));
+        // Names and paths read left to right, as in Everything: a Hebrew or
+        // Arabic name keeps its extension on the right and a path its
+        // folders in order (the words themselves still read right to left).
+        self.set_name_markup(format!("{LRM}{}", highlight_markup(&name, terms)));
+        self.set_folder_markup(format!("{LRM}{}", highlight_markup(&folder, terms)));
         self.set_name(name);
         self.set_folder(folder);
         self.set_extension(extension);
@@ -173,5 +180,18 @@ mod tests {
         );
         let terms = vec!["שלום".to_string()];
         assert_eq!(highlight_markup("שָׁלוֹם.txt", &terms), "<b>שָׁלוֹם</b>.txt");
+    }
+
+    #[test]
+    fn names_and_paths_read_left_to_right() {
+        let row = Row {
+            name: "שלום.txt".as_bytes().to_vec(),
+            folder: "/home/עברית".as_bytes().to_vec(),
+            ..Default::default()
+        };
+        let item = RowItem::from_row(&row, &[]);
+        assert_eq!(item.name_markup(), "\u{200E}שלום.txt");
+        assert_eq!(item.folder_markup(), "\u{200E}/home/עברית");
+        assert_eq!(item.name(), "שלום.txt", "the plain name has no mark");
     }
 }

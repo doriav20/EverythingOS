@@ -40,20 +40,20 @@ const fn col(
 pub const COLUMNS: &[ColumnDef] = &[
     ColumnDef {
         markup: true,
-        ..col("name", "Name", 320, true, SortKey::Name, "name-markup")
+        ..col("name", "Name", 280, true, SortKey::Name, "name-markup")
     },
     ColumnDef {
         markup: true,
-        ..col("path", "Path", 420, true, SortKey::Path, "folder-markup")
+        ..col("path", "Path", 300, true, SortKey::Path, "folder-markup")
     },
     ColumnDef {
         numeric: true,
-        ..col("size", "Size", 100, true, SortKey::Size, "size")
+        ..col("size", "Size", 90, true, SortKey::Size, "size")
     },
     col(
         "extension",
         "Extension",
-        90,
+        80,
         false,
         SortKey::Extension,
         "extension",
@@ -62,7 +62,7 @@ pub const COLUMNS: &[ColumnDef] = &[
     col(
         "date-modified",
         "Date Modified",
-        150,
+        140,
         true,
         SortKey::Modified,
         "modified",
@@ -70,7 +70,7 @@ pub const COLUMNS: &[ColumnDef] = &[
     col(
         "date-created",
         "Date Created",
-        150,
+        140,
         false,
         SortKey::Created,
         "created",
@@ -78,7 +78,7 @@ pub const COLUMNS: &[ColumnDef] = &[
     col(
         "date-accessed",
         "Date Accessed",
-        150,
+        140,
         false,
         SortKey::Accessed,
         "accessed",
@@ -86,7 +86,7 @@ pub const COLUMNS: &[ColumnDef] = &[
     col(
         "attributes",
         "Attributes",
-        90,
+        80,
         false,
         SortKey::Attributes,
         "attributes",
@@ -94,7 +94,7 @@ pub const COLUMNS: &[ColumnDef] = &[
     col(
         "date-recently-changed",
         "Date Recently Changed",
-        170,
+        150,
         false,
         SortKey::RecentlyChanged,
         "changed",
@@ -104,7 +104,7 @@ pub const COLUMNS: &[ColumnDef] = &[
         ..col(
             "run-count",
             "Run Count",
-            90,
+            80,
             false,
             SortKey::RunCount,
             "run-count",
@@ -113,7 +113,7 @@ pub const COLUMNS: &[ColumnDef] = &[
     col(
         "date-run",
         "Date Run",
-        150,
+        140,
         false,
         SortKey::DateRun,
         "date-run",

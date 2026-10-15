@@ -100,7 +100,8 @@ def rows():
             if row.get_role_name() != "table row" or not showing(row):
                 continue
             cells = [
-                row.get_child_at_index(j).get_name()
+                # Names and paths start with an invisible left-to-right mark.
+                (row.get_child_at_index(j).get_name() or "").replace("\u200e", "")
                 for j in range(row.get_child_count())
             ]
             if any(cells):

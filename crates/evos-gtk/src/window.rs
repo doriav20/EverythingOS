@@ -358,6 +358,10 @@ impl Ui {
         self.model.set_terms(terms);
         self.model.reset(result, total);
         self.update_count();
+        // The selection went with the old results.
+        if self.preview.widget.is_visible() {
+            self.preview.show(None);
+        }
         if old != 0 && old != result {
             self.backend.call(move |c| c.release(old), |_| {});
         }

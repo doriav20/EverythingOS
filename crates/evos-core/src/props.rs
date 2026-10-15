@@ -8,10 +8,9 @@
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{self, BufReader, Read};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -24,25 +23,61 @@ pub const MAX_CONTENT: u64 = 64 << 20;
 /// `O_NOATIME` on Linux (x86, x86-64, ARM, AArch64, RISC-V).
 pub const O_NOATIME: i32 = 0o1_000_000;
 
-/// Opens a file for reading without updating its access time.
+/// Opens a regular file for reading without updating its access time.
+///
+/// The daemon reads as root on behalf of users, so the path must lead
+/// exactly to the file the index describes: no component may be a
+/// symbolic link (a user could otherwise point one at a file they cannot
+/// read, or swap a folder for one after it was indexed), and FIFOs and
+/// devices are refused rather than read (opening a FIFO would block).
 pub fn open_readonly(path: &[u8]) -> io::Result<File> {
+    use rustix::fs::{openat2, Mode, OFlags, ResolveFlags, CWD};
+    let flags =
+        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::NOCTTY;
     let path = Path::new(OsStr::from_bytes(path));
-    match OpenOptions::new()
-        .read(true)
-        .custom_flags(O_NOATIME)
-        .open(path)
-    {
+    let open = |extra: OFlags| {
+        match openat2(
+            CWD,
+            path,
+            flags | extra,
+            Mode::empty(),
+            ResolveFlags::NO_SYMLINKS,
+        ) {
+            // Before Linux 5.6 only the final component can be checked.
+            Err(rustix::io::Errno::NOSYS) => rustix::fs::open(path, flags | extra, Mode::empty()),
+            result => result,
+        }
+    };
+    let fd = match open(OFlags::from_bits_retain(O_NOATIME as u32)) {
         // Not the owner and no CAP_FOWNER: O_NOATIME is not permitted.
-        Err(e) if e.raw_os_error() == Some(1) => OpenOptions::new().read(true).open(path),
+        Err(rustix::io::Errno::PERM) => open(OFlags::empty()),
         result => result,
+    }?;
+    let file = File::from(fd);
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not a regular file",
+        ));
     }
+    Ok(file)
 }
 
-/// Reads up to `limit` bytes of a file as text: UTF-16 files (with a byte
-/// order mark) are converted to UTF-8, everything else is returned as is.
-pub fn read_content(path: &[u8], limit: u64) -> io::Result<Vec<u8>> {
+/// Reads up to `limit` bytes of a file, without updating its access time.
+pub fn read_bytes(path: &[u8], limit: u64) -> io::Result<Vec<u8>> {
     let mut data = Vec::new();
     open_readonly(path)?.take(limit).read_to_end(&mut data)?;
+    Ok(data)
+}
+
+/// Reads up to `limit` bytes of a file as text (see [`decode_text`]).
+pub fn read_content(path: &[u8], limit: u64) -> io::Result<Vec<u8>> {
+    Ok(decode_text(read_bytes(path, limit)?))
+}
+
+/// UTF-16 text (with a byte order mark) converted to UTF-8; anything else
+/// is returned as is.
+pub fn decode_text(data: Vec<u8>) -> Vec<u8> {
     let utf16 = |bytes: &[u8], le: bool| {
         let units: Vec<u16> = bytes
             .chunks_exact(2)
@@ -56,11 +91,11 @@ pub fn read_content(path: &[u8], limit: u64) -> io::Result<Vec<u8>> {
             .collect();
         String::from_utf16_lossy(&units).into_bytes()
     };
-    Ok(match data.get(..2) {
+    match data.get(..2) {
         Some([0xff, 0xfe]) => utf16(&data[2..], true),
         Some([0xfe, 0xff]) => utf16(&data[2..], false),
         _ => data,
-    })
+    }
 }
 
 /// Properties read from file headers.
@@ -224,6 +259,37 @@ mod tests {
             before,
             "O_NOATIME keeps the access time"
         );
+    }
+
+    #[test]
+    fn only_regular_files_are_read_and_links_never_followed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let secret = tmp.path().join("secret");
+        std::fs::create_dir(&secret).unwrap();
+        std::fs::write(secret.join("key"), "s3cret").unwrap();
+        let mine = tmp.path().join("mine");
+        std::fs::create_dir(&mine).unwrap();
+        std::os::unix::fs::symlink(secret.join("key"), mine.join("link")).unwrap();
+        std::os::unix::fs::symlink(&secret, mine.join("dirlink")).unwrap();
+        assert!(read_bytes(&b(&secret.join("key")), 100).is_ok());
+        assert!(
+            read_bytes(&b(&mine.join("link")), 100).is_err(),
+            "final link"
+        );
+        assert!(
+            read_bytes(&b(&mine.join("dirlink/key")), 100).is_err(),
+            "link in the middle of the path"
+        );
+        assert!(read_bytes(&b(&secret), 100).is_err(), "a folder");
+        let fifo = tmp.path().join("fifo");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .is_ok_and(|s| s.success());
+        if made {
+            // Opening a FIFO for reading would block until a writer comes.
+            assert!(read_bytes(&b(&fifo), 100).is_err(), "a FIFO");
+        }
     }
 
     fn filetime_atime(p: &Path) -> std::time::SystemTime {

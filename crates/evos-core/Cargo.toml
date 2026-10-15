@@ -16,6 +16,7 @@ lofty = "0.22"
 memchr = "2"
 rayon = "1"
 regex = "1"
+rustix = { version = "1", features = ["fs"] }
 thiserror.workspace = true
 unicode-normalization = "0.1"
 zstd = "0.13"

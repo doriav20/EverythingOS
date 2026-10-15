@@ -617,6 +617,7 @@ dependencies = [
  "proptest",
  "rayon",
  "regex",
+ "rustix",
  "tempfile",
  "thiserror",
  "unicode-normalization",

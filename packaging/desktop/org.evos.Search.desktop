@@ -10,8 +10,12 @@ Categories=Utility;FileTools;GTK;
 Keywords=search;find;locate;everything;files;
 StartupNotify=true
 DBusActivatable=false
-Actions=toggle;
+Actions=toggle;new-window;
 
 [Desktop Action toggle]
 Name=Show or Hide
 Exec=evos-gtk --toggle
+
+[Desktop Action new-window]
+Name=New Window
+Exec=evos-gtk -new-window

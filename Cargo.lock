@@ -595,10 +595,12 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "clap",
+ "evos-core",
  "evos-proto",
  "rpassword",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

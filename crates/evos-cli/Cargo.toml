@@ -14,7 +14,11 @@ path = "src/main.rs"
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap = { version = "4", features = ["derive", "env"] }
+evos-core.workspace = true
 evos-proto.workspace = true
 rpassword = "7"
 serde.workspace = true
 serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

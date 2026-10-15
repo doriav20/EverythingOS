@@ -32,7 +32,9 @@ serde = { version = "1", features = ["derive"] }
 [profile.release]
 lto = "thin"
 codegen-units = 1
-debug = "line-tables-only"
+# Packaged binaries: symbols stay (panic messages name functions), debug
+# information goes.
+strip = "debuginfo"
 
 [profile.bench]
 debug = true

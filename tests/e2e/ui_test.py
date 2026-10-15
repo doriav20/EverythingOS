@@ -61,23 +61,35 @@ def app():
 
 
 def walk(node, depth=0):
+    """The node and its descendants. Widgets GTK destroys while we walk
+    (rows rebuilt after a change) are skipped, not fatal."""
     if node is None or depth > 40:
         return
     yield node
-    for i in range(node.get_child_count()):
-        yield from walk(node.get_child_at_index(i), depth + 1)
+    try:
+        children = [node.get_child_at_index(i) for i in range(node.get_child_count())]
+    except Exception:
+        return
+    for child in children:
+        yield from walk(child, depth + 1)
 
 
 def showing(node):
-    return node.get_state_set().contains(Atspi.StateType.SHOWING)
+    try:
+        return node.get_state_set().contains(Atspi.StateType.SHOWING)
+    except Exception:
+        return False
 
 
 def find_all(role=None, name=None, root=None, visible=True):
     out = []
     for n in walk(root or app()):
-        if role and n.get_role_name() != role:
-            continue
-        if name is not None and n.get_name() != name:
+        try:
+            if role and n.get_role_name() != role:
+                continue
+            if name is not None and n.get_name() != name:
+                continue
+        except Exception:
             continue
         if visible and not showing(n):
             continue
@@ -199,6 +211,8 @@ def xdo(*args):
 
 def click_node(node, button=1, mods=(), dx=None):
     """Clicks a widget of the first search window (or a dialog in it)."""
+    if node is None:
+        raise LookupError("the widget to click is not there")
     # GTK reports positions relative to its window only; add the window's
     # place on the screen.
     rect = Atspi.Component.get_extents(node, Atspi.CoordType.WINDOW)
@@ -306,8 +320,11 @@ def app_action(name):
 
 def find_named(name, roles, root=None):
     for n in find_all(root=root):
-        if n.get_role_name() in roles and accessible_name(n).replace("_", "") == name:
-            return n
+        try:
+            if n.get_role_name() in roles and accessible_name(n).replace("_", "") == name:
+                return n
+        except Exception:
+            continue
     return None
 
 
@@ -706,7 +723,7 @@ def mounts_in_preferences(disk):
     # SMB, NFS, SSHFS, then "Local folder (bind mount)".
     key("Down", "Down", "Down", "Return")
     check(fill("Source, e.g. /path/to/folder", source), "choosing the folder type in the form")
-    press(find_named("Add", ("push button",)))
+    press(wait(lambda: find_named("Add", ("push button",))))
     check(wait(lambda: evos_count("bound-file.txt") == 1, timeout=30),
           "a folder mounted from Preferences gets indexed")
     check(wait(lambda: find_all(name="e2e-folder")), "the new mount is listed")
@@ -729,7 +746,7 @@ def share_mount(source, user, password, name):
     fill("Source, e.g. //server/share", source)
     fill("User name", user)
     fill("Password", password)
-    press(find_named("Add", ("push button",)))
+    press(wait(lambda: find_named("Add", ("push button",))))
     root = "/mnt/evos/gui-smb"
     check(wait(lambda: evos_count(f"under:{root} \"{name}\"") == 1, timeout=180),
           "an SMB share mounted from Preferences gets indexed")

@@ -44,6 +44,11 @@ pub struct Meta {
     pub mode: u32,
     pub uid: u32,
     pub gid: u32,
+    /// Birth (creation) time in nanoseconds; 0 when the filesystem does
+    /// not record it.
+    pub btime: i64,
+    /// Last access time in nanoseconds.
+    pub atime: i64,
 }
 
 impl Meta {
@@ -52,8 +57,7 @@ impl Meta {
             size: 0,
             mtime,
             mode: mode::S_IFDIR | 0o755,
-            uid: 0,
-            gid: 0,
+            ..Default::default()
         }
     }
 
@@ -62,9 +66,13 @@ impl Meta {
             size,
             mtime,
             mode: mode::S_IFREG | 0o644,
-            uid: 0,
-            gid: 0,
+            ..Default::default()
         }
+    }
+
+    /// Equal in everything that makes an entry "changed" (not atime).
+    fn same_content(&self, other: &Meta) -> bool {
+        Meta { atime: 0, ..*self } == Meta { atime: 0, ..*other }
     }
 
     pub fn is_dir(&self) -> bool {
@@ -115,6 +123,11 @@ pub struct Index {
     pub(crate) mode: Vec<u32>,
     pub(crate) uid: Vec<u32>,
     pub(crate) gid: Vec<u32>,
+    pub(crate) btime: Vec<i64>,
+    pub(crate) atime: Vec<i64>,
+    /// When this index last saw the entry appear or change (the "date
+    /// recently changed").
+    pub(crate) changed: Vec<i64>,
     pub(crate) flags: Vec<u8>,
     pub(crate) names: Vec<u8>,
     pub(crate) folded: Vec<u8>,
@@ -145,6 +158,9 @@ impl Index {
             mode: Vec::new(),
             uid: Vec::new(),
             gid: Vec::new(),
+            btime: Vec::new(),
+            atime: Vec::new(),
+            changed: Vec::new(),
             flags: Vec::new(),
             names: Vec::new(),
             folded: Vec::new(),
@@ -231,7 +247,22 @@ impl Index {
             mode: self.mode[i],
             uid: self.uid[i],
             gid: self.gid[i],
+            btime: self.btime[i],
+            atime: self.atime[i],
         }
+    }
+
+    pub fn btime(&self, id: EntryId) -> i64 {
+        self.btime[id as usize]
+    }
+
+    pub fn atime(&self, id: EntryId) -> i64 {
+        self.atime[id as usize]
+    }
+
+    /// When the index last saw this entry appear or change.
+    pub fn changed(&self, id: EntryId) -> i64 {
+        self.changed[id as usize]
     }
 
     /// Returns true if the directory has no live children.
@@ -364,17 +395,23 @@ impl Index {
         (self.insert(parent, name, meta), true)
     }
 
-    /// Replaces the metadata of an entry. Returns true if anything changed.
+    /// Replaces the metadata of an entry. Returns true if anything other
+    /// than the access time changed (access times are updated silently:
+    /// they are not changes to the entry).
     pub fn set_meta(&mut self, id: EntryId, meta: Meta) -> bool {
-        if self.meta(id) == meta {
+        let i = id as usize;
+        let old = self.meta(id);
+        self.atime[i] = meta.atime;
+        if old.same_content(&meta) {
             return false;
         }
-        let i = id as usize;
         self.size[i] = meta.size;
         self.mtime[i] = meta.mtime;
         self.mode[i] = meta.mode;
         self.uid[i] = meta.uid;
         self.gid[i] = meta.gid;
+        self.btime[i] = meta.btime;
+        self.changed[i] = now_ns();
         self.generation += 1;
         true
     }
@@ -440,6 +477,7 @@ impl Index {
             self.fold_len[i] = flen;
         }
         self.parent[i] = new_parent;
+        self.changed[i] = now_ns();
         self.link(new_parent, id);
         self.hash_insert(id);
         self.generation += 1;
@@ -557,6 +595,9 @@ impl Index {
             out.mode.push(self.mode[old]);
             out.uid.push(self.uid[old]);
             out.gid.push(self.gid[old]);
+            out.btime.push(self.btime[old]);
+            out.atime.push(self.atime[old]);
+            out.changed.push(self.changed[old]);
             out.flags.push(self.flags[old]);
         }
         out.live = live;
@@ -586,6 +627,9 @@ impl Index {
             mode,
             uid,
             gid,
+            btime,
+            atime,
+            changed,
             flags
         );
         self.names.clear();
@@ -686,6 +730,9 @@ impl Index {
         self.mode.push(meta.mode);
         self.uid.push(meta.uid);
         self.gid.push(meta.gid);
+        self.btime.push(meta.btime);
+        self.atime.push(meta.atime);
+        self.changed.push(now_ns());
         self.flags.push(0);
         self.live += 1;
         id
@@ -717,6 +764,13 @@ pub fn extension(name: &[u8]) -> &[u8] {
         Some(0) | None => b"",
         Some(dot) => &name[dot + 1..],
     }
+}
+
+/// The current time in Unix nanoseconds.
+pub(crate) fn now_ns() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos() as i64)
 }
 
 fn arena_offset(len: usize) -> u32 {

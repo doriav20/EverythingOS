@@ -25,8 +25,8 @@ use crate::store::{Index, Meta, NO_ENTRY};
 
 const MAGIC: &[u8; 8] = b"EVOSIDX\0";
 const END: &[u8; 8] = b"EVOSEND\0";
-const VERSION: u32 = 1;
-const COLUMNS: u32 = 16;
+const VERSION: u32 = 2;
+const COLUMNS: u32 = 19;
 const ZSTD_LEVEL: i32 = 1;
 
 /// Error loading a snapshot.
@@ -102,6 +102,9 @@ pub fn write_snapshot(index: &Index, extra: &[u8], w: impl Write) -> io::Result<
         encode(&index.mode),
         encode(&index.uid),
         encode(&index.gid),
+        encode(&index.btime),
+        encode(&index.atime),
+        encode(&index.changed),
         encode(&index.flags),
         index.names.clone(),
         index.folded.clone(),
@@ -191,6 +194,9 @@ pub fn read_snapshot(r: impl Read) -> Result<(Index, Vec<u8>), SnapshotError> {
     index.mode = decode(&next())?;
     index.uid = decode(&next())?;
     index.gid = decode(&next())?;
+    index.btime = decode(&next())?;
+    index.atime = decode(&next())?;
+    index.changed = decode(&next())?;
     index.flags = decode(&next())?;
     index.names = next();
     index.folded = next();
@@ -239,6 +245,9 @@ fn validate(ix: &Index) -> Result<(), SnapshotError> {
         ix.mode.len(),
         ix.uid.len(),
         ix.gid.len(),
+        ix.btime.len(),
+        ix.atime.len(),
+        ix.changed.len(),
         ix.flags.len(),
     ];
     if n == 0 || lens.iter().any(|&l| l != n) {

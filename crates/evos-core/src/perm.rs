@@ -126,11 +126,10 @@ mod tests {
 
     fn dir(perm: u32, uid: u32, gid: u32) -> Meta {
         Meta {
-            size: 0,
-            mtime: 0,
             mode: mode::S_IFDIR | perm,
             uid,
             gid,
+            ..Default::default()
         }
     }
 

@@ -57,15 +57,25 @@ const MASK: StatxFlags = StatxFlags::TYPE
     .union(StatxFlags::UID)
     .union(StatxFlags::GID)
     .union(StatxFlags::SIZE)
-    .union(StatxFlags::MTIME);
+    .union(StatxFlags::MTIME)
+    .union(StatxFlags::ATIME)
+    .union(StatxFlags::BTIME);
+
+fn ns(t: &rustix::fs::StatxTimestamp) -> i64 {
+    t.tv_sec * 1_000_000_000 + t.tv_nsec as i64
+}
 
 fn meta_of(st: &Statx) -> Meta {
+    // Not every filesystem records birth times (statx then omits BTIME).
+    let has_btime = st.stx_mask & StatxFlags::BTIME.bits() != 0;
     Meta {
         size: st.stx_size,
-        mtime: st.stx_mtime.tv_sec * 1_000_000_000 + st.stx_mtime.tv_nsec as i64,
+        mtime: ns(&st.stx_mtime),
         mode: st.stx_mode as u32,
         uid: st.stx_uid,
         gid: st.stx_gid,
+        btime: if has_btime { ns(&st.stx_btime) } else { 0 },
+        atime: ns(&st.stx_atime),
     }
 }
 

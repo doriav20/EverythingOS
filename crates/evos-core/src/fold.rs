@@ -145,6 +145,49 @@ pub fn has_upper(s: &str) -> bool {
     s.chars().any(|c| c.is_uppercase())
 }
 
+/// Byte ranges of `text` where any of `terms` occurs, ignoring case and
+/// diacritics, sorted and merged. Used to highlight search terms in
+/// results: "resume" highlights all of "Résumé".
+pub fn highlight(text: &str, terms: &[String]) -> Vec<std::ops::Range<usize>> {
+    // The folded text, and for each of its bytes the original character's
+    // byte range.
+    let mut folded = Vec::with_capacity(text.len());
+    let mut origin: Vec<(usize, usize)> = Vec::with_capacity(text.len());
+    for (at, c) in text.char_indices() {
+        let end = at + c.len_utf8();
+        let before = folded.len();
+        push_normalized(c, &Normalize::FOLDED, &[], &mut folded);
+        if folded.len() == before {
+            // A dropped combining mark belongs to the preceding character.
+            if let Some(last) = origin.last_mut() {
+                last.1 = end;
+            }
+        }
+        origin.resize(folded.len(), (at, end));
+    }
+    let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
+    for term in terms {
+        let needle = fold(term.as_bytes());
+        if needle.is_empty() {
+            continue;
+        }
+        for start in memchr::memmem::find_iter(&folded, &needle) {
+            let first = origin[start];
+            let last = origin[start + needle.len() - 1];
+            ranges.push(first.0..last.1);
+        }
+    }
+    ranges.sort_by_key(|r| (r.start, r.end));
+    let mut merged: Vec<std::ops::Range<usize>> = Vec::with_capacity(ranges.len());
+    for r in ranges {
+        match merged.last_mut() {
+            Some(prev) if r.start <= prev.end => prev.end = prev.end.max(r.end),
+            _ => merged.push(r),
+        }
+    }
+    merged
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,5 +272,22 @@ mod tests {
     fn has_upper_detects_case() {
         assert!(has_upper("abC"));
         assert!(!has_upper("abc é שלום"));
+    }
+
+    #[test]
+    fn highlight_maps_folded_matches_back() {
+        let terms = |t: &[&str]| t.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let text = "My Résumé.pdf";
+        let r = highlight(text, &terms(&["resume"]));
+        assert_eq!(r.len(), 1);
+        assert_eq!(&text[r[0].clone()], "Résumé");
+        // Hebrew with niqqud: the marks belong to the highlighted letters.
+        let text = "שָׁלוֹם עולם";
+        let r = highlight(text, &terms(&["שלום"]));
+        assert_eq!(&text[r[0].clone()], "שָׁלוֹם");
+        // Overlapping and adjacent matches merge.
+        let r = highlight("aaaa", &terms(&["aa", "a"]));
+        assert_eq!(r, vec![0..4]);
+        assert!(highlight("abc", &terms(&["", "x"])).is_empty());
     }
 }

@@ -15,6 +15,7 @@ memchr = "2"
 rayon = "1"
 regex = "1"
 thiserror.workspace = true
+unicode-normalization = "0.1"
 zstd = "0.13"
 
 [dev-dependencies]

@@ -11,8 +11,12 @@ authors.workspace = true
 adw = { package = "libadwaita", version = "0.8", features = ["v1_5"] }
 async-channel = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+evos-core.workspace = true
 evos-proto.workspace = true
 gtk = { package = "gtk4", version = "0.10", features = ["v4_14"] }
+
+[dev-dependencies]
+tempfile = "3"
 
 # Package `evos-gtk`: the desktop client.
 [package.metadata.deb]

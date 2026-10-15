@@ -630,9 +630,11 @@ version = "0.1.0"
 dependencies = [
  "async-channel",
  "chrono",
+ "evos-core",
  "evos-proto",
  "gtk4",
  "libadwaita",
+ "tempfile",
 ]
 
 [[package]]

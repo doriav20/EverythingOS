@@ -33,6 +33,8 @@ pub struct State {
     requested: HashSet<u32>,
     /// Placeholders handed out for rows that are still loading.
     waiting: HashMap<u32, glib::WeakRef<RowItem>>,
+    /// Search terms highlighted in names and paths.
+    terms: Vec<String>,
     fetcher: Option<Fetcher>,
 }
 
@@ -70,7 +72,7 @@ mod imp {
             let page = position / PAGE;
             if let Some(rows) = state.pages.get(&page) {
                 let row = rows.get((position % PAGE) as usize)?;
-                return Some(RowItem::from_row(row).upcast());
+                return Some(RowItem::from_row(row, &state.terms).upcast());
             }
             let item = RowItem::loading();
             state.waiting.insert(position, item.downgrade());
@@ -99,6 +101,11 @@ impl ResultModel {
     /// answer must come back through [`ResultModel::set_rows`].
     pub fn set_fetcher(&self, fetch: impl Fn(u32, u32, u32) + 'static) {
         self.imp().state.borrow_mut().fetcher = Some(Box::new(fetch));
+    }
+
+    /// Sets the terms to highlight in rows shown from now on.
+    pub fn set_terms(&self, terms: Vec<String>) {
+        self.imp().state.borrow_mut().terms = terms;
     }
 
     pub fn result(&self) -> u32 {
@@ -155,9 +162,10 @@ impl ResultModel {
         let s = self.imp().state.borrow();
         if let Some(rows) = s.pages.get(&page) {
             let rows: Vec<Row> = fill.iter().map(|(_, i)| rows[*i].clone()).collect();
+            let terms = s.terms.clone();
             drop(s);
             for ((item, _), row) in fill.into_iter().zip(rows) {
-                item.fill(&row);
+                item.fill(&row, &terms);
             }
         }
     }

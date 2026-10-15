@@ -1,8 +1,13 @@
 //! `*` / `?` wildcard matching over raw bytes.
 //!
-//! The whole text must match the pattern. `*` matches any sequence and `?`
-//! exactly one character (one UTF-8 sequence, or one byte of invalid UTF-8).
-//! The common shapes `*.ext`, `prefix*` and `*infix*` compile to fast paths.
+//! The whole text must match the pattern. In names `*` matches any sequence
+//! and `?` exactly one character (one UTF-8 sequence, or one byte of
+//! invalid UTF-8). The common shapes `*.ext`, `prefix*` and `*infix*`
+//! compile to fast paths.
+//!
+//! In paths, as in Everything 1.5, `*` and `?` do not match the separator
+//! while `**` matches anything, so `/home/*/notes.txt` only looks one level
+//! deep and `/home/**/notes.txt` at any depth.
 
 use memchr::memmem;
 
@@ -20,6 +25,8 @@ enum Plan {
     Suffix(Vec<u8>),
     Contains(Box<memmem::Finder<'static>>),
     General(Vec<Tok>),
+    /// Separator-aware path pattern.
+    Path(regex::bytes::Regex),
 }
 
 /// A compiled wildcard pattern.
@@ -38,11 +45,45 @@ impl Wildcard {
 
     pub fn is_match(&self, text: &[u8]) -> bool {
         match &self.plan {
+            Plan::Path(re) => re.is_match(text),
             Plan::Exact(lit) => text == lit.as_slice(),
             Plan::Prefix(lit) => text.starts_with(lit),
             Plan::Suffix(lit) => text.ends_with(lit),
             Plan::Contains(finder) => finder.find(text).is_some(),
             Plan::General(toks) => general_match(toks, text),
+        }
+    }
+
+    /// A pattern for full paths: `*` and `?` stop at `/`, `**` does not.
+    pub fn new_path(pattern: &[u8]) -> Self {
+        let mut re = String::from("(?s)^");
+        let mut i = 0;
+        while i < pattern.len() {
+            match pattern[i] {
+                b'*' if pattern.get(i + 1) == Some(&b'*') => {
+                    re.push_str(".*");
+                    while pattern.get(i + 1) == Some(&b'*') {
+                        i += 1;
+                    }
+                }
+                b'*' => re.push_str("[^/]*"),
+                b'?' => re.push_str("[^/]"),
+                _ => {
+                    let end = pattern[i..]
+                        .iter()
+                        .position(|&b| b == b'*' || b == b'?')
+                        .map_or(pattern.len(), |p| i + p);
+                    re.push_str(&regex::escape(&String::from_utf8_lossy(&pattern[i..end])));
+                    i = end;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+        re.push('$');
+        let re = regex::bytes::Regex::new(&re).expect("escaped wildcard pattern is a valid regex");
+        Wildcard {
+            plan: Plan::Path(re),
         }
     }
 
@@ -194,6 +235,23 @@ mod tests {
         assert!(m("*/src/*.rs", "/home/me/src/lib.rs"));
         assert!(m("*a*a*a*a*b", "aaaaaaaaaaaaaaaaaab"));
         assert!(!m("*a*a*a*a*b", "aaaaaaaaaaaaaaaaaaa"));
+    }
+
+    #[test]
+    fn path_stars_respect_separators() {
+        let p =
+            |pat: &str, text: &str| Wildcard::new_path(pat.as_bytes()).is_match(text.as_bytes());
+        assert!(p("/home/*/notes.txt", "/home/me/notes.txt"));
+        assert!(!p("/home/*/notes.txt", "/home/me/deep/notes.txt"));
+        assert!(p("/home/**/notes.txt", "/home/me/deep/notes.txt"));
+        assert!(p("**/src/*.rs", "/x/y/src/main.rs"));
+        assert!(!p("**/src/*.rs", "/x/src/sub/main.rs"));
+        assert!(p("/d/?.txt", "/d/ש.txt"), "? is one Hebrew letter");
+        assert!(!p("/d?x", "/d/x"), "? never matches the separator");
+        assert!(
+            p("/a/(1)+[2].txt", "/a/(1)+[2].txt"),
+            "regex characters are literal"
+        );
     }
 
     #[test]

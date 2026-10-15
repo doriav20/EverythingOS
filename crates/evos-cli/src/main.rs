@@ -332,20 +332,12 @@ fn quoted(path: &[u8]) -> String {
 }
 
 impl SearchArgs {
-    /// The search text: the terms (a term with spaces is one phrase), the
-    /// scope options and the filter.
+    /// The search text: the terms, the scope options and the filter. The
+    /// terms are joined as they are: on Linux a whole search is usually
+    /// quoted to keep `>`, `|` and `!` from the shell, so `evos "ext:pdf
+    /// size:>1mb"` is two terms; a phrase is written `evos '"a b"'`.
     fn query(&self) -> Result<String, Failure> {
-        let mut parts: Vec<String> = self
-            .query
-            .iter()
-            .map(|t| {
-                if t.contains(char::is_whitespace) && !t.contains('"') {
-                    format!("\"{t}\"")
-                } else {
-                    t.clone()
-                }
-            })
-            .collect();
+        let mut parts: Vec<String> = self.query.clone();
         let mut scopes = Vec::new();
         for p in &self.paths {
             scopes.push(format!("under:{}", quoted(&absolute(p)?)));
@@ -722,9 +714,9 @@ mod tests {
     }
 
     #[test]
-    fn scope_and_phrases() {
+    fn quoted_searches_and_scopes() {
         let (a, _) = parse(&[
-            "report final",
+            "ext:pdf size:>1mb",
             "--parent",
             "/tmp/a b",
             "--filter",
@@ -732,7 +724,7 @@ mod tests {
         ]);
         assert_eq!(
             a.query().unwrap(),
-            "\"report final\" parent:\"/tmp/a b\" doc:"
+            "ext:pdf size:>1mb parent:\"/tmp/a b\" doc:"
         );
         let (a, _) = parse(&["--path", "/x", "--path", "/y", "z"]);
         assert_eq!(a.query().unwrap(), "z <under:\"/x\"|under:\"/y\">");

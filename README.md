@@ -4,13 +4,16 @@ Instant file search for Linux, in the spirit of [Everything](https://www.voidtoo
 
 - **Instant.** All file names live in a compact in-memory index; a substring search over a million entries takes about 5 ms.
 - **Always current.** Local disks are followed live through fanotify filesystem-wide watches (the Linux counterpart of the NTFS journal Everything uses), with an inotify fallback.
-- **Network shares, done properly.** EverythingOS mounts SMB, NFS and SSHFS shares (and bind-mounts folders) for you, then keeps even huge shares fresh without re-crawling them: SMB change notifications, adaptive parallel scanning and per-folder hot/cold scheduling.
-- **Everything's search syntax**, a fast GTK4 desktop window and an `es`-style command line.
+- **Network shares, done properly.** EverythingOS mounts SMB, NFS and SSHFS shares (and folders) for you, from the window or the command line, then keeps even huge shares fresh without re-crawling them: SMB change notifications, adaptive parallel scanning and per-folder hot/cold scheduling.
+- **Everything 1.5's search syntax**: operators, wildcards, every modifier and function from `ext:` and `size:` to `dupe:`, `content:`, `child:`, `width:` and `artist:`, with the same date and size forms. See [docs/everything-parity.md](docs/everything-parity.md).
+- **Every language.** Names in Hebrew, Arabic, Greek, Cyrillic, Japanese or with emoji are searched with Unicode case folding, and diacritics are ignored by default as in Everything: `שלום` finds `שָׁלוֹם`, `resume` finds `Résumé`.
+- **It only looks.** Indexing and searching never change a file — not even its access time.
+- **A desktop window** with Everything's columns, highlighting, preview, bookmarks and command line, and an `es`-compatible command-line tool.
 
 | Component  | Role                                                       |
 |------------|------------------------------------------------------------|
 | `evosd`    | System service: indexes, watches, mounts, answers queries  |
-| `evos`     | Command-line search and administration                     |
+| `evos`     | Command-line search and administration (es-compatible)     |
 | `evos-gtk` | Desktop search window (GTK4 / libadwaita)                  |
 
 ## Install
@@ -47,41 +50,74 @@ cargo build --release
 sudo install -m755 target/release/{evosd,evos,evos-gtk} /usr/local/bin/
 ```
 
-## Searching
+## The desktop window
+
+Type to search; results update as you type and as files change, with the matched part of names and paths in bold. Click a column header to sort (again to reverse); right-click any header to choose columns: Name, Path, Size, Extension, Type, Date Modified, Date Created, Date Accessed, Attributes, Date Recently Changed, Run Count and Date Run.
+
+| Key | Action |
+|---|---|
+| Enter, double-click | open (counts a run, as in Everything) |
+| Ctrl+Enter | open the containing folder |
+| Ctrl+C / Ctrl+Shift+C | copy the files / their full paths |
+| Alt+Enter | properties: every date, attributes, run history |
+| Alt+P | preview pane (images and text) |
+| Ctrl+I, Ctrl+B, Ctrl+U, Ctrl+M, Ctrl+R | match case, whole words, path, diacritics, regex |
+| Ctrl+D, Ctrl+Shift+B | add a bookmark, organize bookmarks |
+| Ctrl+S | export the results (EFU, CSV, TSV, TXT, M3U) |
+| Ctrl+N, Ctrl+W | new window, close window |
+| Ctrl+F / F3, F5, Esc | search box, refresh, clear the search (twice: close) |
+
+The main menu has every Search option (also match prefix/suffix and ignore punctuation/white space), the View options (preview, status bar, columns, sort), Recent Searches, Tools (statistics, rescan, save the index) and Preferences, where indexed volumes are listed and shares and folders are mounted. The right-click menu offers Open, Open With, Open Containing Folder, the copy commands and Properties. Results can be dragged into other applications. Settings, bookmarks and history are kept in `~/.config/evos/evos-gtk.ini`.
+
+Everything's command line works too, and is passed to the running window:
 
 ```bash
-evos report                      # names containing "report"
-evos "*.rs" !test                # wildcards match the whole name; ! negates
-evos ext:jpg;png size:>2mb dm:lastweek
-evos "src/main"                  # a "/" matches against the full path
-evos --sort size --desc --size -H -n 20 file:
-evos --json pic: holiday         # JSON lines for scripts
+evos-gtk -s "*.pdf" -sort size-descending   # search, sorted by size
+evos-gtk -filter pictures -s holiday
+evos-gtk -bookmark "Big videos"
+evos-gtk -toggle-window                      # bind this to a hotkey
+evos-gtk -help                               # every option
 ```
 
-`evos` exits with 1 when nothing matched, like grep. In the desktop window the same syntax applies; results update as you type and as files change. Double-click or Enter opens a file, Ctrl+Enter opens its folder, Ctrl+Shift+C copies paths, and rows can be dragged into other applications. Bind `evos-gtk --toggle` to a keyboard shortcut in your desktop settings to summon the window like Everything's hotkey.
+## Searching from the command line
 
-### Query syntax
+`evos` follows Everything's `es.exe`, including its single-dash options:
+
+```bash
+evos report                                  # names containing "report"
+evos "ext:jpg;png size:>2mb dm:lastweek"     # quote searches that use > | < !
+evos '"two words"'                           # a phrase
+evos -sort size-descending -size -dm -n 20 file:
+evos /ad projects                            # DIR-style: folders only
+evos -csv -name -path-column -size ext:pdf > pdfs.csv
+evos -export-efu music.efu audio:            # an Everything file list
+evos --filelist music.efu queen              # search a file list offline
+evos --inc-run-count ~/notes.md; evos "runcount:>0"
+evos --json pic: holiday                     # JSON lines for scripts
+evos stats                                   # files, folders and sizes per volume
+```
+
+`evos --help` lists every option: columns (`-name`, `-path-column`, `-size`, `-dc`, `-dm`, `-da`, `-attributes`, `-run-count`, ...), formats (`-csv`, `-tsv`, `-efu`, `-m3u8`, `-json`, `-export-*`), size and date formats, highlighting, `-get-result-count`, `-get-total-size`, `-save-db` and `-reindex`. It exits with 1 when nothing matched, like grep.
+
+### Search syntax
 
 | Syntax | Meaning |
 |---|---|
-| `foo bar` | both terms (AND) |
-| `foo\|bar` | either term (OR binds tighter than AND) |
-| `!foo` | not foo |
-| `<foo bar>\|baz` | grouping |
-| `"two words"` | quotes protect spaces and operators |
-| `*.txt`, `IMG_????.jpg` | wildcards; the whole name must match |
-| `case:` `ww:` `path:` `nopath:` `regex:` | match case, whole words, full path, name only, regular expression |
-| `file:` `folder:` | only files / only folders (combine: `file:report`) |
-| `ext:jpg;png` | extensions |
-| `size:>10mb`, `size:1mb..5mb`, `size:huge` | size (binary units; `empty tiny small medium large huge gigantic`) |
-| `dm:today`, `dm:lastweek`, `dm:last3days`, `dm:2024-05`, `dm:>=2023` | date modified |
-| `parent:/home/me` | direct children of a folder |
-| `under:/srv/projects` | anything below a folder |
-| `depth:2`, `len:>40` | path depth, name length |
-| `empty:` | empty folders |
+| `foo bar`, `foo\|bar`, `!foo`, `<foo bar>\|baz` | AND, OR, NOT, grouping |
+| `"two words"`, `&sp:` `&vert:` ... | phrases; character entities |
+| `*.txt`, `IMG_????.jpg`, `/src/*/main.rs`, `**/test/*` | wildcards match the whole name; in paths `*` stays in one folder, `**` crosses folders |
+| `case:` `diacritics:` `ww:` `prefix:` `suffix:` `startwith:` `endwith:` `whole:` `path:` `regex:` `ignorepunc:` `ignorews:` | modifiers (and their `no` forms; `?mod:` applies one to the whole search) |
+| `file:` `folder:` `ext:jpg;png` `type:"PDF Document"` `attrib:RH` | kind, extension, type description, attributes |
+| `size:>10mb`, `size:1mb..5mb`, `size:huge` | size (folders too) |
+| `dm:` `dc:` `da:` `rc:` `dr:` with `today`, `lastweek`, `last3days`, `2024-05`, `>=2023`, `mtd`, `unknown`... | modified, created, accessed, recently changed, run dates |
+| `parent:` `under:` `root:` `depth:` `len:` `empty:` `child:` `child-count:` | structure |
+| `dupe:` `sizedupe:` `stemdupe:` ... | duplicates |
+| `content:text`, `regex:content:^TODO` | file content (UTF-8 and UTF-16) |
+| `width:` `height:` `bitdepth:` `length:` `artist:` `album:` `title:` `genre:` `track:` `comment:` | image and media properties |
+| `runcount:`, `count:100` | run history; result limit |
 | `audio:` `video:` `pic:` `doc:` `zip:` `exe:` | type macros |
 
-The Search menu toggles (and `-i`, `-w`, `-p`, `-r` on the command line) set defaults for case, whole words, path matching and regular expressions.
+The full list, with every alias and value form, is in [docs/everything-parity.md](docs/everything-parity.md).
 
 ## Network shares
 
@@ -118,9 +154,19 @@ Measured by the end-to-end suite (`make e2e`, 100,000 files per share, container
 | Server becomes unreachable | offline after ~45 s, still searchable |
 | Daemon restart | searchable again after 0.3 s |
 
+## Searching never changes your files
+
+EverythingOS only reads metadata and, when you ask for it, content:
+
+- Folders are listed with `O_NOATIME` and entries are examined with `statx`, so indexing does not even update access times.
+- `content:`, the property functions and the preview pane are served by the daemon, which reads with `O_NOATIME`, never follows symbolic links (a link cannot be used to read someone else's file), refuses FIFOs and devices, and only reads files the asking user could read themselves.
+- The desktop window has no delete, rename or move: it lists files and opens them in the application you choose.
+
+The end-to-end suite checks this on a filesystem mounted with `strictatime`, where any ordinary read would show: after scans, rescans, content and property searches, exports and previews, every access, modification and change time, the set of files and their content are unchanged.
+
 ## Permissions
 
-`evosd` runs as root so it can index everything and use fanotify, but every user only gets results they could list themselves: an entry is returned only if each folder above it grants search permission and its folder grants read permission to the caller (mode bits; POSIX ACLs are not evaluated). Set `single_user = true` on single-user machines to skip the check.
+`evosd` runs as root so it can index everything and use fanotify, but every user only gets results they could list themselves: an entry is returned only if each folder above it grants search permission and its folder grants read permission to the caller (mode bits; POSIX ACLs are not evaluated). Content searches and previews additionally need read permission on the file. Run history is kept per user. Set `single_user = true` on single-user machines to skip the check.
 
 ## Configuration
 
@@ -134,20 +180,29 @@ Everything builds and runs in Docker, so it works from any host:
 
 | Command | Purpose |
 |---|---|
-| `make check` | rustfmt, clippy (`-D warnings`) and all tests |
+| `make check` | rustfmt, clippy (`-D warnings`) and all unit and integration tests |
 | `make test`, `make build`, `make shell` | the usual |
-| `make e2e` | SMB/NFS end-to-end suite against Samba and nfs-ganesha containers (`E2E_FILES=1000000 make e2e` for a big share) |
+| `make e2e` | every end-to-end suite, including real Samba and nfs-ganesha servers (`E2E_FILES=1000000 make e2e` for a big share) |
+| `make e2e-local` | the suites that need no servers: search features, read-only guarantees and the desktop client |
+| `make ui-test` | the desktop client alone |
 | `make package`, `make deb`, `make rpm`, `make arch`, `make tarball` | packages into `dist/` |
 | `make run`, `make stop` | containerized daemon plus browser GUI |
 | `docker compose run --rm dev cargo bench -p evos-core` | search, sort and snapshot benchmarks |
 
+The end-to-end suites (`tests/e2e/run.sh [features] [readonly] [ui] [network]`):
+
+- **features** — the search syntax through the real daemon and CLI; names in Hebrew, Arabic, Greek, Japanese and emoji; content and media properties; run history; exports and file lists; live updates; per-user filtering.
+- **readonly** — nothing changes on a `strictatime` filesystem, not even access times.
+- **ui** — the real `evos-gtk` window on Xvfb, driven like a user (typing, Hebrew input, shortcuts, clicks, right-click menu, clipboard, scrolling 5,000 results, dialogs, mounting a folder from Preferences, surviving a daemon restart) and read through the accessibility bus, so it checks what is actually on screen.
+- **network** — SMB and NFS: scanning, change notifications, sweeps, latency, offline shares, restarts, names in other scripts and content over both, and an SMB share mounted with a login from the window's Preferences.
+
 Workspace layout:
 
 ```
-crates/evos-core    index store, query language, parallel search, sorting, permissions, snapshots
+crates/evos-core    index store, query language, parallel search, sorting, permissions, snapshots, content/properties
 crates/evos-scan    mount discovery, walker, sweeps, fanotify/inotify, SMB notify, AIMD gate, scheduler, volume drivers
 crates/evos-mount   mount definitions, credentials, mount commands, supervision
-crates/evos-proto   socket protocol and client library
+crates/evos-proto   socket protocol, client library, file list writer
 crates/evosd        the daemon
 crates/evos-cli     `evos`
 crates/evos-gtk     `evos-gtk`
@@ -161,9 +216,8 @@ Benchmarks on 12 cores with 1M entries: substring search 5 ms, `*.ext` 3.5 ms, p
 
 - Linux 5.9+ is needed for fanotify filesystem watches (5.17+ for single-event renames); other filesystems fall back to inotify or sweeps.
 - POSIX ACLs are not considered when filtering results.
-- Sorting result sets of many millions of entries takes a noticeable fraction of a second.
-- Wayland has no global hotkeys for applications; bind `evos-gtk --toggle` in your desktop's keyboard settings.
-- Content search (`content:`), duplicate finding and indexing a file server remotely (federation) are not implemented yet.
+- Not implemented from Everything: the HTTP and ETP servers, thumbnail view, the folder and filter sidebars, result omission, tabs, user-defined filters, and opening file lists in the window (the CLI searches them). See [docs/everything-parity.md](docs/everything-parity.md).
+- Wayland has no global hotkeys for applications; bind `evos-gtk -toggle-window` in your desktop's keyboard settings.
 
 ## License
 

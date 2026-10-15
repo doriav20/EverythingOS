@@ -89,6 +89,16 @@ impl Visibility {
         id == ROOT || self.dir_state(memo, index, index.parent(id)) == LISTABLE
     }
 
+    /// Could the caller open this file for reading? (It must be visible,
+    /// and its mode must grant the caller read permission.)
+    pub fn can_read(&self, vol: u16, index: &Index, id: EntryId) -> bool {
+        if self.caller.is_root() {
+            return true;
+        }
+        let meta = index.meta(id);
+        self.is_visible(vol, index, id) && self.caller.allows(meta.mode, meta.uid, meta.gid, R)
+    }
+
     fn dir_state(&self, memo: &[AtomicU8], index: &Index, dir: EntryId) -> u8 {
         let mut chain = Vec::new();
         let mut cur = dir;
@@ -210,5 +220,28 @@ mod tests {
             &[],
         );
         assert!(!vis.is_visible(3, &ix, ROOT));
+    }
+
+    #[test]
+    fn reading_needs_visibility_and_the_read_bit() {
+        let mut ix = Index::new(b"/", dir(0o755, 0, 0));
+        let open = ix.insert(ROOT, b"open.txt", Meta::file(1, 0));
+        let mut locked = Meta::file(1, 0);
+        locked.mode = mode::S_IFREG | 0o600;
+        let locked = ix.insert(ROOT, b"locked.txt", locked);
+        let private = ix.insert(ROOT, b"private", dir(0o700, 0, 0));
+        let inside = ix.insert(private, b"inside.txt", Meta::file(1, 0));
+        let vols = [(0, &ix)];
+        let user = Visibility::new(
+            Caller {
+                uid: 5,
+                gids: vec![5],
+            },
+            &vols,
+        );
+        assert!(user.can_read(0, &ix, open));
+        assert!(!user.can_read(0, &ix, locked), "mode 0600 of root");
+        assert!(!user.can_read(0, &ix, inside), "inside a 0700 folder");
+        assert!(Visibility::new(Caller::root(), &vols).can_read(0, &ix, locked));
     }
 }

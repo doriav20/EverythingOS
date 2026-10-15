@@ -62,6 +62,7 @@ pub fn show(parent: &impl IsA<gtk::Widget>, backend: &Backend) {
         .tooltip_text("Add Mount")
         .css_classes(["flat"])
         .build();
+    add.update_property(&[gtk::accessible::Property::Label("Add Mount")]);
     mounts.set_header_suffix(Some(&add));
     let mount_page = adw::PreferencesPage::builder()
         .title("Mounts")
@@ -154,6 +155,9 @@ impl Prefs {
                                 .valign(gtk::Align::Center)
                                 .css_classes(["flat"])
                                 .build();
+                            rescan.update_property(&[gtk::accessible::Property::Label(
+                                "Re-check for changes",
+                            )]);
                             let (pp, path) = (p.clone(), v.root.clone());
                             rescan.connect_clicked(move |_| {
                                 let (path, pp2) = (path.clone(), pp.clone());
@@ -228,6 +232,7 @@ impl Prefs {
                 .valign(gtk::Align::Center)
                 .tooltip_text("Mounted")
                 .build();
+            switch.update_property(&[gtk::accessible::Property::Label("Mounted")]);
             let (p, name) = (self.clone(), spec.name.clone());
             switch.connect_state_set(move |switch, on| {
                 let (name, p2, sw) = (name.clone(), p.clone(), switch.clone());
@@ -258,6 +263,7 @@ impl Prefs {
             .valign(gtk::Align::Center)
             .css_classes(["flat"])
             .build();
+        edit.update_property(&[gtk::accessible::Property::Label("Edit")]);
         let (p, s) = (self.clone(), spec.clone());
         edit.connect_clicked(move |_| p.edit_mount(Some(s.clone())));
         row.add_suffix(&edit);
@@ -268,6 +274,7 @@ impl Prefs {
             .valign(gtk::Align::Center)
             .css_classes(["flat"])
             .build();
+        remove.update_property(&[gtk::accessible::Property::Label("Remove")]);
         let (p, name) = (self.clone(), spec.name.clone());
         remove.connect_clicked(move |_| p.confirm_remove(&name));
         row.add_suffix(&remove);

@@ -94,9 +94,11 @@ pub fn bookmark_name(
         Some("Add to Bookmarks"),
         Some("The search, its filter, options and sort are saved."),
     );
+    // Enter in the name field confirms.
     let entry = adw::EntryRow::builder()
         .title("Name")
         .text(suggestion)
+        .activates_default(true)
         .build();
     let list = gtk::ListBox::builder()
         .selection_mode(gtk::SelectionMode::None)
@@ -107,6 +109,7 @@ pub fn bookmark_name(
     dialog.add_responses(&[("cancel", "_Cancel"), ("add", "_Add")]);
     dialog.set_response_appearance("add", adw::ResponseAppearance::Suggested);
     dialog.set_default_response(Some("add"));
+    let field = entry.clone();
     dialog.connect_response(None, move |_, response| {
         let name = entry.text().trim().to_string();
         if response == "add" && !name.is_empty() {
@@ -114,6 +117,8 @@ pub fn bookmark_name(
         }
     });
     dialog.present(Some(parent));
+    // Type the name right away.
+    field.grab_focus();
 }
 
 /// Lists bookmarks with a remove button each; `remove` gets the name.
@@ -144,6 +149,7 @@ pub fn organize_bookmarks(
             .valign(gtk::Align::Center)
             .css_classes(["flat"])
             .build();
+        button.update_property(&[gtk::accessible::Property::Label("Remove")]);
         let (name, remove, r2, group2) = (b.name.clone(), remove.clone(), r.clone(), group.clone());
         button.connect_clicked(move |_| {
             remove(name.clone());

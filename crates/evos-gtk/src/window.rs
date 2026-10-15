@@ -49,6 +49,7 @@ const REMEMBER_AFTER: Duration = Duration::from_secs(2);
 
 type UiAction = Box<dyn Fn(&Rc<Ui>)>;
 type UiTextAction = Box<dyn Fn(&Rc<Ui>, String)>;
+type UiToggle = Box<dyn Fn(&Rc<Ui>, bool)>;
 
 #[derive(Default)]
 struct State {
@@ -903,7 +904,7 @@ impl Ui {
 
     fn add_actions(self: &Rc<Self>, app: &adw::Application) {
         let window = &self.window;
-        let stateful = |name: &str, initial: bool, f: Box<dyn Fn(&Rc<Ui>, bool)>| {
+        let stateful = |name: &str, initial: bool, f: UiToggle| {
             let action = gio::SimpleAction::new_stateful(name, None, &initial.to_variant());
             let ui = Rc::downgrade(self);
             action.connect_change_state(move |action, value| {
@@ -1299,9 +1300,13 @@ impl Ui {
         }
         if l.sort.is_some() || l.descending.is_some() {
             let current = self.state.borrow().sort;
+            // A new sort column starts ascending unless told otherwise;
+            // -sort-descending alone flips the current one.
             let sort = Sort {
                 key: l.sort.unwrap_or(current.key),
-                descending: l.descending.unwrap_or(current.descending),
+                descending: l
+                    .descending
+                    .unwrap_or(l.sort.is_none() && current.descending),
             };
             self.apply_sort(sort, false);
         }

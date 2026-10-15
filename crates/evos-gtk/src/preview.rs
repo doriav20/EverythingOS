@@ -89,6 +89,8 @@ impl Preview {
             .orientation(gtk::Orientation::Vertical)
             .spacing(4)
             .width_request(280)
+            // A named group, so screen readers (and the UI tests) find it.
+            .accessible_role(gtk::AccessibleRole::Group)
             .build();
         let header = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)

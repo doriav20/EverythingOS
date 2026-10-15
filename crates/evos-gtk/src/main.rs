@@ -12,6 +12,7 @@ use gtk::{gio, glib};
 const APP_ID: &str = "org.evos.Search";
 
 type Windows = Rc<RefCell<Vec<Rc<Ui>>>>;
+type OpenWindow = Rc<dyn Fn(&adw::Application) -> Rc<Ui>>;
 
 /// The focused search window, or the most recent one.
 fn current(app: &adw::Application, windows: &Windows) -> Option<Rc<Ui>> {
@@ -51,7 +52,7 @@ fn main() -> glib::ExitCode {
     let windows: Windows = Rc::default();
     let settings = Rc::new(RefCell::new(Settings::load(&Settings::default_file())));
 
-    let open_window: Rc<dyn Fn(&adw::Application) -> Rc<Ui>> = {
+    let open_window: OpenWindow = {
         let windows = windows.clone();
         Rc::new(move |app| {
             let (backend, notices) = Backend::spawn(socket.clone());

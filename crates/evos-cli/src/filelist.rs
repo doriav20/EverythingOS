@@ -171,6 +171,7 @@ fn row_of(ix: &Index, id: EntryId, folder_sizes: &[u64]) -> Row {
         run_count: 0,
         date_run: 0,
         offline: false,
+        remote: false,
     }
 }
 

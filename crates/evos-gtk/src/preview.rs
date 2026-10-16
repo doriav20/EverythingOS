@@ -158,7 +158,7 @@ impl Preview {
         let preview = self.clone();
         let wanted = path.clone();
         self.backend.call(
-            move |c| c.read_file(&path, limit),
+            move |c| c.read_file(&path, 0, limit),
             move |result| {
                 if *preview.current.borrow() != wanted {
                     return;

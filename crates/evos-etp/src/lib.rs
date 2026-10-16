@@ -27,7 +27,7 @@
 
 mod client;
 
-pub use client::{EtpClient, EtpError};
+pub use client::{EtpClient, EtpError, Query};
 
 use evos_proto::{efu, Row, SortKey};
 
@@ -329,6 +329,7 @@ pub fn item_to_row(item: &Item) -> Row {
         run_count: 0,
         date_run: 0,
         offline: false,
+        remote: true,
     }
 }
 

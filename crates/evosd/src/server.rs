@@ -263,7 +263,7 @@ async fn handle(
             .await;
             Response::Ok
         }
-        Request::ReadFile { path, limit } => {
+        Request::ReadFile { path, limit, .. } => {
             let (d, caller) = (daemon.clone(), peer.caller.clone());
             match blocking(move || read_file(&d, &caller, &path, limit)).await {
                 Ok(data) => Response::FileContent(data),
@@ -607,6 +607,7 @@ fn fetch(
                 run_count: run.count,
                 date_run: run.last,
                 offline: offline.get(&hit.vol).copied().unwrap_or(false),
+                remote: false,
             }
         })
         .collect())

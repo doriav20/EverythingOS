@@ -367,7 +367,7 @@ fn previews_read_indexed_regular_files_only() {
         .success());
     let atime = std::fs::metadata(&pdf).unwrap().accessed().unwrap();
     let data = client
-        .read_file(&path("docs/reports/q1 report.pdf"), 100)
+        .read_file(&path("docs/reports/q1 report.pdf"), 0, 100)
         .unwrap();
     assert_eq!(data.len(), 100, "limited");
     assert_eq!(std::fs::metadata(&pdf).unwrap().accessed().unwrap(), atime);
@@ -377,16 +377,16 @@ fn previews_read_indexed_regular_files_only() {
         _ => None,
     };
     assert_eq!(
-        code(client.read_file(&path("docs"), 10)),
+        code(client.read_file(&path("docs"), 0, 10)),
         Some(ErrorCode::BadRequest)
     );
     assert_eq!(
-        code(client.read_file(b"/etc/hostname", 10)),
+        code(client.read_file(b"/etc/hostname", 0, 10)),
         Some(ErrorCode::NotFound),
         "only indexed files"
     );
     assert_eq!(
-        code(client.read_file(&path("photos/host-link"), 10)),
+        code(client.read_file(&path("photos/host-link"), 0, 10)),
         Some(ErrorCode::Failed),
         "links are not followed"
     );

@@ -8,20 +8,28 @@
 mod client;
 pub mod efu;
 mod mounts;
+mod servers;
 
 use serde::{Deserialize, Serialize};
 
 pub use client::{Client, ClientError, SearchResult};
 pub use mounts::{Credentials, IndexSettings, MountInfo, MountKind, MountSpec};
+pub use servers::{
+    EtpServer, HttpServer, IndexServer, IndexUser, IndexVolume, RemoteIndexInfo, RemoteIndexSpec,
+    RemoteKind, RemoteSearch, ServerSettings, ETP_PORT, HTTP_PORT, INDEX_PORT,
+};
 
 /// Bumped on incompatible protocol changes.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Where the daemon listens by default.
 pub const DEFAULT_SOCKET: &str = "/run/evos/evosd.sock";
 
 /// Largest accepted frame.
 pub const MAX_FRAME: usize = 64 << 20;
+
+/// Largest accepted response: index snapshots of big volumes.
+pub const MAX_RESPONSE: usize = 1 << 30;
 
 /// Search toggles, as in Everything's Search menu.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -192,7 +200,50 @@ pub enum Request {
     /// could read it themselves.
     ReadFile {
         path: Vec<u8>,
+        offset: u64,
         limit: u32,
+    },
+    /// The ETP, HTTP and index server settings (passwords left out).
+    Servers,
+    /// Changes them; needs authorization.
+    SetServers(Box<ServerSettings>),
+    RemoteIndexes,
+    /// Adds or replaces a remote index; `password: None` keeps the stored
+    /// one. Needs authorization.
+    RemoteIndexAdd {
+        spec: RemoteIndexSpec,
+        password: Option<String>,
+    },
+    RemoteIndexRemove {
+        name: String,
+    },
+    /// Connects to the server once to check the settings.
+    RemoteIndexTest {
+        spec: RemoteIndexSpec,
+        password: Option<String>,
+    },
+    /// Searches on this connection go to an ETP server from now on.
+    Connect(RemoteSearch),
+    /// Back to the local index.
+    Disconnect,
+    /// Index server: log in (the first request on its TCP port).
+    IndexLogin {
+        user: String,
+        password: String,
+    },
+    /// Index server: the volumes this user may copy.
+    IndexVolumes,
+    /// Index server: a full copy of a volume (a snapshot file).
+    IndexSnapshot {
+        volume: u16,
+    },
+    /// Index server: what changed since a copy was taken (a
+    /// [`Response::IndexData`] delta, or [`Response::IndexResync`]).
+    IndexDelta {
+        volume: u16,
+        epoch: u64,
+        len: u32,
+        since: i64,
     },
 }
 
@@ -229,6 +280,16 @@ pub enum Response {
     RunCount(RunInfo),
     Statistics(Vec<VolumeStatistics>),
     FileContent(Vec<u8>),
+    Servers(Box<ServerSettings>),
+    RemoteIndexes(Vec<RemoteIndexInfo>),
+    /// Connected to an ETP server; its welcome message.
+    Connected {
+        server: String,
+    },
+    IndexVolumes(Vec<IndexVolume>),
+    IndexData(Vec<u8>),
+    /// The copy is from an older epoch: take a new snapshot.
+    IndexResync,
     Error {
         code: ErrorCode,
         message: String,
@@ -282,6 +343,9 @@ pub struct Row {
     pub date_run: i64,
     /// The row lives on a network share that is currently offline.
     pub offline: bool,
+    /// The row is on another computer (a remote index or an ETP server):
+    /// its file is read through the daemon, and opening it opens a copy.
+    pub remote: bool,
 }
 
 impl Row {

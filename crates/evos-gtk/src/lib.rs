@@ -3,6 +3,7 @@
 pub mod backend;
 pub mod cmdline;
 pub mod columns;
+pub mod connect;
 pub mod dialogs;
 pub mod export;
 pub mod format;

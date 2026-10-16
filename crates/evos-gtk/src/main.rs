@@ -7,12 +7,14 @@ use evos_gtk::backend::Backend;
 use evos_gtk::cmdline;
 use evos_gtk::settings::Settings;
 use evos_gtk::window::{self, Ui};
+use evos_proto::RemoteSearch;
 use gtk::{gio, glib};
 
 const APP_ID: &str = "org.evos.Search";
 
 type Windows = Rc<RefCell<Vec<Rc<Ui>>>>;
-type OpenWindow = Rc<dyn Fn(&adw::Application) -> Rc<Ui>>;
+/// Opens a search window, of this computer or of an ETP server.
+type OpenWindow = Rc<dyn Fn(&adw::Application, Option<RemoteSearch>) -> Rc<Ui>>;
 
 /// The focused search window, or the most recent one.
 fn current(app: &adw::Application, windows: &Windows) -> Option<Rc<Ui>> {
@@ -53,9 +55,9 @@ fn main() -> glib::ExitCode {
     let settings = Rc::new(RefCell::new(Settings::load(&Settings::default_file())));
 
     let open_window: OpenWindow = {
-        let windows = windows.clone();
-        Rc::new(move |app| {
-            let (backend, notices) = Backend::spawn(socket.clone());
+        let (windows, settings) = (windows.clone(), settings.clone());
+        Rc::new(move |app, remote| {
+            let (backend, notices) = Backend::spawn_for(socket.clone(), remote);
             let ui = window::build(app, backend, notices, settings.clone());
             windows.borrow_mut().push(ui.clone());
             let list = Rc::downgrade(&windows);
@@ -68,7 +70,7 @@ fn main() -> glib::ExitCode {
         })
     };
 
-    let (open, list) = (open_window.clone(), windows.clone());
+    let (open, list, prefs) = (open_window.clone(), windows.clone(), settings.clone());
     app.connect_startup(move |app| {
         let about = gio::SimpleAction::new("about", None);
         let a = app.clone();
@@ -85,9 +87,22 @@ fn main() -> glib::ExitCode {
         app.add_action(&about);
 
         let new_window = gio::SimpleAction::new("new-window", None);
-        let (a, open) = (app.clone(), open.clone());
-        new_window.connect_activate(move |_, _| open(&a).window.present());
+        let (a, open_new) = (app.clone(), open.clone());
+        new_window.connect_activate(move |_, _| open_new(&a, None).window.present());
         app.add_action(&new_window);
+
+        let connect = gio::SimpleAction::new("connect", None);
+        let (a, windows, open, settings) = (app.clone(), list.clone(), open.clone(), prefs.clone());
+        connect.connect_activate(move |_, _| {
+            let Some(ui) = current(&a, &windows) else {
+                return;
+            };
+            let (a, open) = (a.clone(), open.clone());
+            evos_gtk::connect::show(&ui.window, ui.backend(), settings.clone(), move |target| {
+                open(&a, Some(target)).window.present();
+            });
+        });
+        app.add_action(&connect);
 
         let preferences = gio::SimpleAction::new("preferences", None);
         let (a, windows) = (app.clone(), list.clone());
@@ -119,8 +134,9 @@ fn main() -> glib::ExitCode {
             return glib::ExitCode::SUCCESS;
         }
         let ui = match current(app, &windows) {
+            _ if launch.connect.is_some() => open_window(app, launch.connect.clone()),
             Some(ui) if !launch.new_window => ui,
-            _ => open_window(app),
+            _ => open_window(app, None),
         };
         if launch.toggle && ui.window.is_visible() && ui.window.is_active() {
             ui.window.set_visible(false);

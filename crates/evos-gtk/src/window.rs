@@ -6,10 +6,10 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use adw::prelude::*;
-use evos_proto::{ClientError, ErrorCode, Request, RunChange, SearchOptions, Sort};
+use evos_proto::{ClientError, ErrorCode, RemoteSearch, Request, RunChange, SearchOptions, Sort};
 use gtk::{gdk, gio, glib, graphene, pango};
 
-use crate::backend::{Backend, Notice};
+use crate::backend::{cache_path, describe, Backend, Notice};
 use crate::cmdline::{Focus, Launch};
 use crate::columns::{self, ColumnDef, COLUMNS};
 use crate::export::{Exporter, Format};
@@ -75,6 +75,8 @@ pub struct Ui {
     count: gtk::Label,
     status: gtk::Label,
     status_bar: gtk::Box,
+    /// Shows the ETP server a window searches, with a way back.
+    server_button: gtk::MenuButton,
     banner: adw::Banner,
     toasts: adw::ToastOverlay,
     preview: Rc<Preview>,
@@ -89,6 +91,8 @@ fn menus(columns_menu: &gio::Menu, history_menu: &gio::Menu) -> gio::Menu {
     let menu = gio::Menu::new();
     let file = gio::Menu::new();
     file.append(Some("_New Window"), Some("app.new-window"));
+    file.append(Some("Connect to _ETP Server…"), Some("app.connect"));
+    file.append(Some("_Disconnect"), Some("win.disconnect"));
     file.append(Some("_Export Results…"), Some("win.export"));
     menu.append_section(None, &file);
 
@@ -196,6 +200,14 @@ pub fn build(
             .build(),
     ));
     header.pack_start(&filter);
+    let server_menu = gio::Menu::new();
+    server_menu.append(Some("_Disconnect"), Some("win.disconnect"));
+    let server_button = gtk::MenuButton::builder()
+        .menu_model(&server_menu)
+        .visible(false)
+        .css_classes(["flat"])
+        .build();
+    header.pack_start(&server_button);
     header.pack_end(&menu_button);
     header.pack_end(&bookmarks_button);
 
@@ -274,6 +286,7 @@ pub fn build(
         count,
         status,
         status_bar,
+        server_button,
         banner,
         toasts,
         preview,
@@ -297,6 +310,7 @@ pub fn build(
     ui.show_sort_indicator(sort);
     ui.rebuild_bookmarks();
     ui.rebuild_history();
+    ui.show_connection();
     ui.search();
     ui.refresh_status();
     ui
@@ -317,6 +331,66 @@ impl Ui {
 
     pub fn backend(&self) -> &Backend {
         &self.backend
+    }
+
+    /// The ETP server this window searches, if any.
+    pub fn remote(&self) -> Option<RemoteSearch> {
+        self.backend.remote()
+    }
+
+    /// Shows which index the window searches: the title, the banner and
+    /// the actions that only make sense for this computer's index.
+    fn show_connection(&self) {
+        let remote = self.remote();
+        match &remote {
+            Some(r) => {
+                let who = describe(r);
+                self.window
+                    .set_title(Some(&format!("{who} — EverythingOS")));
+                let content = adw::ButtonContent::builder()
+                    .icon_name("network-server-symbolic")
+                    .label(&who)
+                    .build();
+                self.server_button.set_child(Some(&content));
+                let searching = format!("Searching {who}");
+                self.server_button.set_tooltip_text(Some(&searching));
+                self.server_button
+                    .update_property(&[gtk::accessible::Property::Label(&searching)]);
+                self.server_button.set_visible(true);
+                self.banner.set_title(&format!("Cannot reach {who}"));
+                self.entry
+                    .set_placeholder_text(Some(&format!("Search {}", r.host)));
+            }
+            None => {
+                self.server_button.set_visible(false);
+                self.window.set_title(Some("EverythingOS"));
+                self.banner
+                    .set_title("Cannot reach the EverythingOS service");
+                self.entry.set_placeholder_text(Some("Search everything"));
+            }
+        }
+        for name in ["reindex", "save-db", "statistics"] {
+            if let Some(a) = self.action(name) {
+                a.set_enabled(remote.is_none());
+            }
+        }
+        if let Some(a) = self.action("disconnect") {
+            a.set_enabled(remote.is_some());
+        }
+    }
+
+    /// Switches the window to an ETP server, or back to this computer.
+    pub fn connect_to(self: &Rc<Self>, target: Option<RemoteSearch>) {
+        let ui = self.clone();
+        self.backend.set_remote(target, move |r| {
+            if let Err(e) = r {
+                ui.toast(&e);
+            }
+            ui.show_connection();
+            ui.search();
+            ui.refresh_status();
+        });
+        self.show_connection();
     }
 
     fn toast(&self, text: &str) {
@@ -565,6 +639,11 @@ impl Ui {
         drag.connect_prepare(move |_, _, _| {
             let item = cell_ref.upgrade()?.item().and_downcast::<RowItem>()?;
             item.loaded().then(|| {
+                if item.row().remote {
+                    // Not a file here: its path as text.
+                    let path = String::from_utf8_lossy(&item.path()).into_owned();
+                    return gdk::ContentProvider::for_value(&path.to_value());
+                }
                 let files = gdk::FileList::from_array(&[item.file()]);
                 gdk::ContentProvider::for_value(&files.to_value())
             })
@@ -578,6 +657,9 @@ impl Ui {
         open.append(Some("_Open"), Some("win.open"));
         open.append(Some("Open _With…"), Some("win.open-with"));
         open.append(Some("Open _Containing Folder"), Some("win.open-folder"));
+        if self.selected(1).first().is_some_and(|i| i.row().remote) {
+            open.append(Some("Save a Cop_y…"), Some("win.save-copy"));
+        }
         menu.append_section(None, &open);
         let copy = gio::Menu::new();
         copy.append(Some("_Copy"), Some("win.copy"));
@@ -622,7 +704,22 @@ impl Ui {
     }
 
     fn open(self: &Rc<Self>, item: &RowItem, how: Open) {
-        let launcher = gtk::FileLauncher::new(Some(&item.file()));
+        if item.row().remote {
+            return self.open_remote(item, how);
+        }
+        self.launch(item, &item.file(), how);
+        // Tell the daemon the user cares about this folder.
+        let mut folder = item.path();
+        if let Some(cut) = folder.iter().rposition(|&b| b == b'/') {
+            folder.truncate(cut.max(1));
+        }
+        self.backend
+            .call(move |c| c.expect_ok(Request::Hint { path: folder }), |_| {});
+    }
+
+    /// Opens `file`, the item's file or a copy of it.
+    fn launch(self: &Rc<Self>, item: &RowItem, file: &gio::File, how: Open) {
+        let launcher = gtk::FileLauncher::new(Some(file));
         launcher.set_always_ask(how == Open::With);
         let window = self.window.clone();
         let report = move |r: Result<(), glib::Error>| {
@@ -644,19 +741,103 @@ impl Ui {
             self.backend
                 .call(move |c| c.run_count(&path, RunChange::Opened), |_| {});
         }
-        // Tell the daemon the user cares about this folder.
-        let mut folder = item.path();
-        if let Some(cut) = folder.iter().rposition(|&b| b == b'/') {
-            folder.truncate(cut.max(1));
-        }
-        self.backend
-            .call(move |c| c.expect_ok(Request::Hint { path: folder }), |_| {});
         self.remember_now();
+    }
+
+    /// Results on another computer: folders are listed in the window, as
+    /// a search; files are copied here and the copy is opened.
+    fn open_remote(self: &Rc<Self>, item: &RowItem, how: Open) {
+        let row = item.row();
+        let folder = match how {
+            Open::Folder => Some(row.folder.clone()).filter(|f| !f.is_empty()),
+            _ if row.is_dir => Some(item.path()),
+            _ => None,
+        };
+        if let Some(folder) = folder {
+            let folder = String::from_utf8_lossy(&folder).into_owned();
+            self.entry.set_text(&format!("parent:\"{folder}\""));
+            self.entry.set_position(-1);
+            return;
+        }
+        let path = item.path();
+        let dest = cache_path(&path, &item.name());
+        let ui = self.clone();
+        let item = item.clone();
+        self.download(path, dest, move |copy| {
+            ui.launch(&item, &gio::File::for_path(copy), how);
+        });
+    }
+
+    /// Copies a file of another computer to `dest`, showing the progress.
+    fn download(
+        self: &Rc<Self>,
+        path: Vec<u8>,
+        dest: PathBuf,
+        then: impl FnOnce(PathBuf) + 'static,
+    ) {
+        let name = dest
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let toast = adw::Toast::builder()
+            .title(glib::markup_escape_text(&format!("Downloading {name}…")))
+            .timeout(0)
+            .build();
+        self.toasts.add_toast(toast.clone());
+        let (t, n) = (toast.clone(), name.clone());
+        let ui = self.clone();
+        self.backend.download(
+            path,
+            dest,
+            move |bytes| {
+                t.set_title(&glib::markup_escape_text(&format!(
+                    "Downloading {n}… {}",
+                    format::size(bytes)
+                )))
+            },
+            move |r| {
+                toast.dismiss();
+                match r {
+                    Ok(copy) => then(copy),
+                    Err(e) => ui.toast(&format!("Cannot download {name}: {e}")),
+                }
+            },
+        );
+    }
+
+    /// Saves a copy of the selected result on another computer.
+    fn save_copy(self: &Rc<Self>) {
+        let Some(item) = self.selected(1).into_iter().next() else {
+            return;
+        };
+        if !item.row().remote || item.is_dir() {
+            return;
+        }
+        let dialog = gtk::FileDialog::builder()
+            .title("Save a Copy")
+            .initial_name(item.name())
+            .modal(true)
+            .build();
+        let ui = self.clone();
+        dialog.save(Some(&self.window), gio::Cancellable::NONE, move |r| {
+            let Some(dest) = r.ok().and_then(|f| f.path()) else {
+                return;
+            };
+            let u = ui.clone();
+            ui.download(item.path(), dest, move |copy| {
+                u.toast(&format!("Saved {}", copy.display()));
+            });
+        });
     }
 
     fn copy_files(&self) {
         let items = self.selected(100_000);
         if items.is_empty() {
+            return;
+        }
+        if items.iter().any(|i| i.row().remote) {
+            // Files of other computers are not files here: copy paths.
+            self.window.clipboard().set_text(&paths_text(&items));
             return;
         }
         let files: Vec<gio::File> = items.iter().map(|i| i.file()).collect();
@@ -1036,6 +1217,8 @@ impl Ui {
             }),
         );
         simple("copy", Box::new(|ui| ui.copy_files()));
+        simple("save-copy", Box::new(|ui| ui.save_copy()));
+        simple("disconnect", Box::new(|ui| ui.connect_to(None)));
         simple(
             "copy-path",
             Box::new(|ui| {
@@ -1391,6 +1574,8 @@ impl Ui {
                         ui.refresh_status();
                     }
                     Notice::Disconnected => ui.banner.set_revealed(true),
+                    // An ETP server sends no changes; F5 searches again.
+                    Notice::IndexChanged if ui.remote().is_some() => {}
                     Notice::IndexChanged => ui.schedule_refresh(),
                     Notice::StatusChanged => ui.refresh_status(),
                 }
@@ -1433,6 +1618,10 @@ impl Ui {
     }
 
     pub fn refresh_status(self: &Rc<Self>) {
+        if let Some(r) = self.remote() {
+            self.status.set_text(&format!("Searching {}", describe(&r)));
+            return;
+        }
         let ui = Rc::downgrade(self);
         self.backend.call(
             |c| c.status(),

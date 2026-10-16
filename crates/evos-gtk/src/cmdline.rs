@@ -40,6 +40,8 @@ pub struct Launch {
     pub exit: bool,
     pub reindex: bool,
     pub save_db: bool,
+    /// An ETP server to search in a new window.
+    pub connect: Option<evos_proto::RemoteSearch>,
     pub help: bool,
 }
 
@@ -66,6 +68,9 @@ Options take one or two dashes, as in Everything:
   -preview, -no-preview     Show or hide the preview pane
   -status-bar, -no-status-bar
   -new-window               Open a new search window
+  -connect <[user[:password]@]host[:port]>
+                            Search an ETP server (Everything or EverythingOS
+                            on another computer) in a new window
   -toggle-window            Show the window, or hide it if it is focused
   -focus-results, -focus-search-edit
   -maximize, -minimize, -fullscreen (and -no- forms)
@@ -168,6 +173,13 @@ pub fn parse(args: &[String]) -> Result<Launch, String> {
                 .remove_columns
                 .extend(crate::columns::parse_list(&value("columns")?)),
             "new-window" => l.new_window = true,
+            "connect" => {
+                let v = value("a server")?;
+                l.connect = Some(
+                    evos_proto::RemoteSearch::parse(&v)
+                        .ok_or_else(|| format!("not a server: {v:?}"))?,
+                );
+            }
             "no-new-window" => l.new_window = false,
             "toggle-window" | "toggle" | "t" => l.toggle = true,
             "preview" => l.preview = Some(true),
@@ -249,6 +261,17 @@ mod tests {
         assert_eq!((l.sort, l.descending), (Some(SortKey::Size), Some(true)));
         assert_eq!(l.search.as_deref(), Some("a -b"), "-s* takes the rest");
         assert!(p(&["--toggle"]).toggle);
+    }
+
+    #[test]
+    fn connections_to_etp_servers() {
+        let l = p(&["-connect", "me:pw@pc:2121", "report"]);
+        let c = l.connect.unwrap();
+        assert_eq!(
+            (c.host.as_str(), c.port, c.username.as_str()),
+            ("pc", 2121, "me")
+        );
+        assert_eq!(l.search.as_deref(), Some("report"));
     }
 
     #[test]

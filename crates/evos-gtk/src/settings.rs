@@ -1,6 +1,6 @@
 //! Settings kept between runs in `~/.config/evos/evos-gtk.ini`: visible
-//! columns, search options, sort, the preview pane, bookmarks and the
-//! search history.
+//! columns, search options, sort, the preview pane, bookmarks, the
+//! search history and recent ETP connections (never their passwords).
 
 use std::path::{Path, PathBuf};
 
@@ -25,6 +25,8 @@ pub const OPTIONS: [(&str, OptionField); 9] = [
 
 /// Searches remembered in the history.
 const HISTORY: usize = 50;
+/// ETP servers remembered.
+const CONNECTIONS: usize = 10;
 
 /// A saved search, as in Everything's Bookmarks menu.
 #[derive(Debug, Clone, PartialEq)]
@@ -48,6 +50,9 @@ pub struct Settings {
     pub bookmarks: Vec<Bookmark>,
     /// Most recent first.
     pub history: Vec<String>,
+    /// ETP servers connected to, most recent first, as
+    /// `[user@]host[:port]`.
+    pub connections: Vec<String>,
     file: Option<PathBuf>,
 }
 
@@ -65,6 +70,7 @@ impl Default for Settings {
             status_bar: true,
             bookmarks: Vec::new(),
             history: Vec::new(),
+            connections: Vec::new(),
             file: None,
         }
     }
@@ -134,6 +140,9 @@ impl Settings {
         s.history = string("search", "history")
             .map(|h| h.lines().map(String::from).collect())
             .unwrap_or_default();
+        s.connections = string("etp", "recent")
+            .map(|h| h.lines().map(String::from).collect())
+            .unwrap_or_default();
         for group in kf.groups().iter() {
             let group = group.as_str();
             if !group.starts_with("bookmark ") {
@@ -167,6 +176,7 @@ impl Settings {
         kf.set_boolean("view", "sort-descending", self.sort.descending);
         kf.set_string("search", "options", &options_to_string(&self.options));
         kf.set_string("search", "history", &self.history.join("\n"));
+        kf.set_string("etp", "recent", &self.connections.join("\n"));
         for (i, b) in self.bookmarks.iter().enumerate() {
             let group = format!("bookmark {i}");
             kf.set_string(&group, "name", &b.name);
@@ -193,6 +203,13 @@ impl Settings {
         self.history.retain(|h| h != search);
         self.history.insert(0, search.to_owned());
         self.history.truncate(HISTORY);
+    }
+
+    /// Puts an ETP server at the top of the recent connections.
+    pub fn remember_connection(&mut self, connection: &str) {
+        self.connections.retain(|c| c != connection);
+        self.connections.insert(0, connection.to_owned());
+        self.connections.truncate(CONNECTIONS);
     }
 
     /// Adds or replaces the bookmark with this name.
@@ -237,6 +254,9 @@ mod tests {
         s.remember("first");
         s.remember("שלום עולם");
         s.remember("first");
+        s.remember_connection("me@pc:2121");
+        s.remember_connection("nas");
+        s.remember_connection("me@pc:2121");
         s.set_bookmark(Bookmark {
             name: "Big videos".into(),
             search: "video: size:>1gb".into(),
@@ -258,6 +278,7 @@ mod tests {
         assert_eq!(back.sort, s.sort);
         assert!(back.preview);
         assert_eq!(back.history, ["first", "שלום עולם"]);
+        assert_eq!(back.connections, ["me@pc:2121", "nas"]);
         assert_eq!(back.bookmarks, s.bookmarks);
         assert_eq!(back.bookmark("big VIDEOS").unwrap().filter, 2);
     }

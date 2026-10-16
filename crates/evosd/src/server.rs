@@ -26,13 +26,16 @@ use evos_proto::{
     PROTOCOL_VERSION,
 };
 use evos_scan::volume::{Phase, WatchMode};
-use parking_lot::RwLockReadGuard;
+use parking_lot::{Mutex, RwLockReadGuard};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{broadcast, mpsc};
 
 use crate::config::Config;
+use crate::connect::{Connection, RemoteResult};
 use crate::history::RunHistory;
+use crate::remote::RemoteManager;
+use crate::servers::ServerManager;
 use crate::volumes::{VolumeHandle, VolumeManager};
 
 /// Shared daemon state.
@@ -41,29 +44,51 @@ pub struct Daemon {
     pub volumes: Arc<VolumeManager>,
     pub mounts: Arc<MountManager>,
     pub history: Arc<RunHistory>,
+    pub servers: Arc<ServerManager>,
+    pub remotes: Arc<RemoteManager>,
     pub events: broadcast::Sender<Event>,
 }
 
-type Failure = (ErrorCode, String);
+pub(crate) type Failure = (ErrorCode, String);
 
 /// Most result sets one connection may hold; the oldest is dropped.
 const MAX_RESULTS: usize = 32;
 /// Most rows per fetch.
 const MAX_FETCH: u32 = 10_000;
 
-struct ResultSet {
-    hits: Vec<Hit>,
+pub(crate) struct ResultSet {
+    pub(crate) hits: Vec<Hit>,
     /// Index epoch of each volume when the search ran; ids are only valid
     /// while it is unchanged.
     epochs: HashMap<u16, u64>,
 }
 
+/// Who a search is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Audience {
+    /// A local user: copies of remote indexes are included and visible to
+    /// everyone.
+    Local,
+    /// A network server's remote user: local volumes only, always
+    /// filtered for the server's "run as" account.
+    Served,
+}
+
+#[derive(Clone)]
+enum Stored {
+    Local(Arc<ResultSet>),
+    /// Results on the ETP server the session is connected to.
+    Remote(Arc<Mutex<RemoteResult>>),
+}
+
 #[derive(Default)]
 struct Session {
-    results: HashMap<u32, Arc<ResultSet>>,
+    results: HashMap<u32, Stored>,
     order: Vec<u32>,
     next: u32,
     subscribed: bool,
+    /// The ETP server searches go to, if connected.
+    remote: Option<Arc<Mutex<Connection>>>,
 }
 
 /// The connecting user, from SO_PEERCRED.
@@ -168,7 +193,17 @@ async fn connection(daemon: Arc<Daemon>, stream: UnixStream) -> io::Result<()> {
     }
     drop(tx);
     let _ = writer_task.await;
+    if let Some(conn) = session.remote.take() {
+        disconnect(conn).await;
+    }
     Ok(())
+}
+
+/// Closes an ETP connection without blocking the runtime.
+async fn disconnect(conn: Arc<Mutex<Connection>>) {
+    if let Some(conn) = Arc::into_inner(conn) {
+        blocking(move || conn.into_inner().close()).await;
+    }
 }
 
 fn failure(f: Failure) -> Response {
@@ -201,12 +236,29 @@ async fn handle(
             options,
             sort,
         } => {
-            let (d, caller) = (daemon.clone(), peer.caller.clone());
             let started = Instant::now();
-            match blocking(move || search(&d, &caller, &query, &options, sort)).await {
+            if let Some(conn) = session.remote.clone() {
+                let highlight = highlight_terms(&parse(&query, &parse_options(&options)));
+                return match blocking(move || conn.lock().search(&query, &options, sort)).await {
+                    Ok(r) => {
+                        let total = r.total;
+                        Response::SearchDone {
+                            result: session.store(Stored::Remote(Arc::new(Mutex::new(r)))),
+                            total,
+                            elapsed_us: started.elapsed().as_micros() as u64,
+                            highlight,
+                        }
+                    }
+                    Err(f) => failure(f),
+                };
+            }
+            let (d, caller) = (daemon.clone(), peer.caller.clone());
+            match blocking(move || search(&d, &caller, &query, &options, sort, Audience::Local))
+                .await
+            {
                 Ok((set, highlight)) => {
                     let total = set.hits.len() as u64;
-                    let result = session.store(set);
+                    let result = session.store(Stored::Local(Arc::new(set)));
                     Response::SearchDone {
                         result,
                         total,
@@ -222,23 +274,44 @@ async fn handle(
             offset,
             count,
         } => {
-            let Some(set) = session.results.get(&result).cloned() else {
-                return failure(unknown_result());
+            let count = count.min(MAX_FETCH);
+            let rows = match session.results.get(&result).cloned() {
+                Some(Stored::Local(set)) => {
+                    let (d, uid) = (daemon.clone(), peer.caller.uid);
+                    blocking(move || fetch(&d, uid, &set, offset, count)).await
+                }
+                Some(Stored::Remote(set)) => match session.remote.clone() {
+                    Some(conn) => {
+                        blocking(move || conn.lock().fetch(&mut set.lock(), offset, count)).await
+                    }
+                    None => Err(unknown_result()),
+                },
+                None => Err(unknown_result()),
             };
-            let (d, uid) = (daemon.clone(), peer.caller.uid);
-            match blocking(move || fetch(&d, uid, &set, offset, count.min(MAX_FETCH))).await {
+            match rows {
                 Ok(rows) => Response::Rows { offset, rows },
                 Err(f) => failure(f),
             }
         }
         Request::Sort { result, sort } => {
-            let Some(set) = session.results.get(&result).cloned() else {
-                return failure(unknown_result());
+            let sorted = match session.results.get(&result).cloned() {
+                Some(Stored::Local(set)) => {
+                    let (d, uid) = (daemon.clone(), peer.caller.uid);
+                    blocking(move || resort(&d, uid, &set, sort))
+                        .await
+                        .map(|s| Stored::Local(Arc::new(s)))
+                }
+                Some(Stored::Remote(set)) => match session.remote.clone() {
+                    Some(conn) => blocking(move || conn.lock().sort(&set.lock(), sort))
+                        .await
+                        .map(|s| Stored::Remote(Arc::new(Mutex::new(s)))),
+                    None => Err(unknown_result()),
+                },
+                None => Err(unknown_result()),
             };
-            let (d, uid) = (daemon.clone(), peer.caller.uid);
-            match blocking(move || resort(&d, uid, &set, sort)).await {
+            match sorted {
                 Ok(sorted) => {
-                    session.results.insert(result, Arc::new(sorted));
+                    session.results.insert(result, sorted);
                     Response::Ok
                 }
                 Err(f) => failure(f),
@@ -263,13 +336,88 @@ async fn handle(
             .await;
             Response::Ok
         }
-        Request::ReadFile { path, limit, .. } => {
-            let (d, caller) = (daemon.clone(), peer.caller.clone());
-            match blocking(move || read_file(&d, &caller, &path, limit)).await {
+        Request::ReadFile {
+            path,
+            offset,
+            limit,
+        } => {
+            let limit = limit.min(MAX_READ);
+            let data = match session.remote.clone() {
+                Some(conn) => blocking(move || conn.lock().read_file(&path, offset, limit)).await,
+                None => {
+                    let (d, caller) = (daemon.clone(), peer.caller.clone());
+                    blocking(move || read_file(&d, &caller, &path, offset, limit)).await
+                }
+            };
+            match data {
                 Ok(data) => Response::FileContent(data),
                 Err(f) => failure(f),
             }
         }
+        Request::Connect(target) => {
+            if let Some(old) = session.remote.take() {
+                disconnect(old).await;
+            }
+            session.drop_remote_results();
+            match blocking(move || Connection::open(target)).await {
+                Ok(conn) => {
+                    let server = conn.welcome.clone();
+                    session.remote = Some(Arc::new(Mutex::new(conn)));
+                    Response::Connected { server }
+                }
+                Err(f) => failure(f),
+            }
+        }
+        Request::Disconnect => {
+            if let Some(old) = session.remote.take() {
+                disconnect(old).await;
+            }
+            session.drop_remote_results();
+            Response::Ok
+        }
+        Request::Servers => Response::Servers(Box::new(daemon.servers.public())),
+        Request::RemoteIndexes => {
+            let d = daemon.clone();
+            Response::RemoteIndexes(blocking(move || d.remotes.list()).await)
+        }
+        Request::RemoteIndexTest { spec, password } => {
+            let password = password.unwrap_or_default();
+            match blocking(move || RemoteManager::test(&spec, &password)).await {
+                Ok(server) => Response::Connected { server },
+                Err(e) => failure((ErrorCode::Failed, e)),
+            }
+        }
+        request @ (Request::SetServers(_)
+        | Request::RemoteIndexAdd { .. }
+        | Request::RemoteIndexRemove { .. }) => {
+            if let Err(message) = crate::mounts::authorize(peer, crate::auth::MANAGE_SERVERS).await
+            {
+                return failure((ErrorCode::PermissionDenied, message));
+            }
+            let d = daemon.clone();
+            let result = match request {
+                Request::SetServers(settings) => d.servers.apply(*settings, &d).await,
+                Request::RemoteIndexAdd { spec, password } => {
+                    blocking(move || d.remotes.add(spec, password)).await
+                }
+                Request::RemoteIndexRemove { name } => {
+                    blocking(move || d.remotes.remove(&name)).await
+                }
+                _ => unreachable!("matched above"),
+            };
+            let _ = daemon.events.send(Event::StatusChanged);
+            match result {
+                Ok(()) => Response::Ok,
+                Err(e) => failure((ErrorCode::Failed, e)),
+            }
+        }
+        Request::IndexLogin { .. }
+        | Request::IndexVolumes
+        | Request::IndexSnapshot { .. }
+        | Request::IndexDelta { .. } => failure((
+            ErrorCode::BadRequest,
+            "index requests are answered by the index server".into(),
+        )),
         Request::RunCount { path, change } => {
             let (history, uid) = (&daemon.history, peer.caller.uid);
             let info = match change {
@@ -338,16 +486,22 @@ async fn handle(
 }
 
 impl Session {
-    fn store(&mut self, set: ResultSet) -> u32 {
+    fn store(&mut self, set: Stored) -> u32 {
         let id = self.next;
         self.next = self.next.wrapping_add(1).max(1);
-        self.results.insert(id, Arc::new(set));
+        self.results.insert(id, set);
         self.order.push(id);
         while self.order.len() > MAX_RESULTS {
             let old = self.order.remove(0);
             self.results.remove(&old);
         }
         id
+    }
+
+    fn drop_remote_results(&mut self) {
+        self.results.retain(|_, r| matches!(r, Stored::Local(_)));
+        let results = &self.results;
+        self.order.retain(|id| results.contains_key(id));
     }
 }
 
@@ -484,26 +638,42 @@ impl Extra for DaemonExtra<'_> {
     }
 }
 
-fn search(
+pub(crate) fn search(
     daemon: &Daemon,
     caller: &Caller,
     query: &str,
     options: &SearchOptions,
     sort: Sort,
+    audience: Audience,
 ) -> Result<(ResultSet, Vec<String>), Failure> {
     let expr = parse(query, &parse_options(options));
     let highlight = highlight_terms(&expr);
     let query = Query::compile(&expr).map_err(|e| (ErrorCode::BadQuery, e.to_string()))?;
-    let handles = daemon.volumes.volumes();
+    let mut handles = daemon.volumes.volumes();
+    if audience == Audience::Served {
+        // Copies of other computers' indexes are never shared on.
+        handles.retain(|h| h.remote.is_none());
+    }
     let snap = Snapshot::take(&handles);
     let vols = snap.volumes();
-    let visibility = (!daemon.cfg.single_user && !caller.is_root())
-        .then(|| Visibility::new(caller.clone(), &vols));
+    let filtered = match audience {
+        Audience::Local => !daemon.cfg.single_user && !caller.is_root(),
+        Audience::Served => !caller.is_root(),
+    };
+    let visibility = filtered.then(|| Visibility::new(caller.clone(), &vols));
+    let copies: Vec<u16> = handles
+        .iter()
+        .filter(|h| h.remote.is_some())
+        .map(|h| h.id)
+        .collect();
     let extra = DaemonExtra::new(&snap, &daemon.history, caller.uid, visibility.as_ref());
+    // Copies of remote indexes hold what the server allowed; local
+    // permissions do not apply to them.
     let filter = |vol: u16, ix: &Index, id: EntryId| {
-        visibility
-            .as_ref()
-            .is_none_or(|v| v.is_visible(vol, ix, id))
+        copies.contains(&vol)
+            || visibility
+                .as_ref()
+                .is_none_or(|v| v.is_visible(vol, ix, id))
     };
     let mut hits = query
         .run_with(&vols, Some(&filter), &extra, &AtomicBool::new(false))
@@ -545,7 +715,7 @@ fn resort(daemon: &Daemon, uid: u32, set: &ResultSet, sort: Sort) -> Result<Resu
     })
 }
 
-fn fetch(
+pub(crate) fn fetch(
     daemon: &Daemon,
     uid: u32,
     set: &ResultSet,
@@ -562,6 +732,11 @@ fn fetch(
     let offline: HashMap<u16, bool> = handles
         .iter()
         .map(|h| (h.id, h.vol.status().phase == Phase::Offline))
+        .collect();
+    let copies: Vec<u16> = handles
+        .iter()
+        .filter(|h| h.remote.is_some())
+        .map(|h| h.id)
         .collect();
     let mut folders: HashMap<(u16, EntryId), Vec<u8>> = HashMap::new();
     Ok(window
@@ -607,7 +782,7 @@ fn fetch(
                 run_count: run.count,
                 date_run: run.last,
                 offline: offline.get(&hit.vol).copied().unwrap_or(false),
-                remote: false,
+                remote: copies.contains(&hit.vol),
             }
         })
         .collect())
@@ -616,11 +791,13 @@ fn fetch(
 /// Largest file preview served.
 const MAX_READ: u32 = 16 << 20;
 
-/// The start of an indexed file, if the caller could read it themselves.
+/// Part of an indexed file, if the caller could read it themselves. Files
+/// of remote index copies are read from their server.
 fn read_file(
     daemon: &Daemon,
     caller: &Caller,
     path: &[u8],
+    offset: u64,
     limit: u32,
 ) -> Result<Vec<u8>, Failure> {
     {
@@ -633,6 +810,13 @@ fn read_file(
         if ix.is_dir(id) {
             return Err((ErrorCode::BadRequest, "folders have no content".into()));
         }
+        if handles.iter().any(|h| h.id == vol && h.remote.is_some()) {
+            drop(snap);
+            return match daemon.remotes.read_file(path, offset, limit) {
+                Some(r) => r.map_err(|e| (ErrorCode::Failed, e)),
+                None => Err((ErrorCode::NotFound, "the remote index is gone".into())),
+            };
+        }
         if !daemon.cfg.single_user && !caller.is_root() {
             let visibility = Visibility::new(caller.clone(), &snap.volumes());
             if !visibility.can_read(vol, ix, id) {
@@ -642,7 +826,7 @@ fn read_file(
         // Read without holding the index locks: a slow share must not
         // stall updates.
     }
-    evos_core::props::read_bytes(path, limit.min(MAX_READ) as u64)
+    evos_core::props::read_range(path, offset, limit.min(MAX_READ) as u64)
         .map_err(|e| (ErrorCode::Failed, e.to_string()))
 }
 
@@ -712,6 +896,7 @@ pub fn status(daemon: &Daemon) -> DaemonStatus {
                     WatchMode::SmbNotify { details: true } => "smb-notify",
                     WatchMode::SmbNotify { details: false } => "smb-notify-basic",
                     WatchMode::Sweeps => "sweeps",
+                    WatchMode::Remote => "remote",
                 }
                 .into(),
                 entries: h.vol.index.read().live_count().saturating_sub(1) as u64,

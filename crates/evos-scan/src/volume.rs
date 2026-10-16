@@ -39,6 +39,8 @@ pub enum WatchMode {
     },
     /// Scheduled folder sweeps only.
     Sweeps,
+    /// A copy of another computer's index, kept current by its server.
+    Remote,
 }
 
 /// Snapshot of a volume's state for status reports.

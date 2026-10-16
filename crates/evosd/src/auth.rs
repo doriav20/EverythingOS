@@ -12,6 +12,10 @@ use zbus::zvariant::Value;
 /// polkit action for adding, changing and removing mounts.
 pub const MANAGE_MOUNTS: &str = "org.evos.manage-mounts";
 
+/// polkit action for the network servers (ETP, HTTP, index server) and
+/// remote indexes.
+pub const MANAGE_SERVERS: &str = "org.evos.manage-servers";
+
 /// `AllowUserInteraction`: let the caller's polkit agent prompt.
 const ALLOW_INTERACTION: u32 = 1;
 

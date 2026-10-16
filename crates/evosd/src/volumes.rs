@@ -33,6 +33,10 @@ pub struct VolumeHandle {
     pub vol: Arc<Volume>,
     pub network: bool,
     pub source: String,
+    /// The remote index this volume is a copy of, if any.
+    pub remote: Option<String>,
+    /// For copies: the volume's root on the server.
+    pub remote_root: Vec<u8>,
     snapshot: PathBuf,
     saved_generation: AtomicU64,
     thread: Mutex<Option<JoinHandle<()>>>,
@@ -137,6 +141,30 @@ pub fn snapshot_name(root: &[u8]) -> String {
         }
     }
     name + ".idx"
+}
+
+/// The root a snapshot file name stands for (see [`snapshot_name`]).
+pub fn root_of_snapshot_name(name: &str) -> Option<Vec<u8>> {
+    let name = name.strip_suffix(".idx")?;
+    if name == "root" {
+        return Some(b"/".to_vec());
+    }
+    let mut root = vec![b'/'];
+    let b = name.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'-' => root.push(b'/'),
+            b'%' => {
+                let hex = std::str::from_utf8(b.get(i + 1..i + 3)?).ok()?;
+                root.push(u8::from_str_radix(hex, 16).ok()?);
+                i += 2;
+            }
+            c => root.push(c),
+        }
+        i += 1;
+    }
+    Some(root)
 }
 
 /// A volume the configuration says should be indexed.
@@ -263,7 +291,8 @@ impl VolumeManager {
         }
         let wanted = self.wanted();
         let current = self.volumes();
-        for handle in &current {
+        // Copies of remote indexes are managed by their drivers.
+        for handle in current.iter().filter(|h| h.remote.is_none()) {
             if !wanted
                 .iter()
                 .any(|w| w.root == handle.vol.root() && w.source == handle.source)
@@ -296,6 +325,8 @@ impl VolumeManager {
             vol: vol.clone(),
             network: w.network,
             source: w.source.clone(),
+            remote: None,
+            remote_root: Vec::new(),
             snapshot: self.cfg.state_dir.join(snapshot_name(&w.root)),
             saved_generation: AtomicU64::new(u64::MAX),
             thread: Mutex::new(None),
@@ -326,6 +357,88 @@ impl VolumeManager {
             .expect("spawn volume thread");
         *handle.thread.lock() = Some(thread);
         self.volumes.write().push(handle);
+    }
+
+    /// The copies of a remote index.
+    pub fn remote_handles(&self, remote: &str) -> Vec<Arc<VolumeHandle>> {
+        self.volumes
+            .read()
+            .iter()
+            .filter(|h| h.remote.as_deref() == Some(remote))
+            .cloned()
+            .collect()
+    }
+
+    /// Adds a volume holding a copy of a server's volume (no driver: the
+    /// remote index updates it). A copy saved earlier is loaded, so the
+    /// index is searchable even while the server is offline.
+    pub fn attach_remote(
+        &self,
+        remote: &str,
+        local_root: &[u8],
+        server_root: &[u8],
+        fs_type: &str,
+    ) -> Arc<VolumeHandle> {
+        if let Some(h) = self
+            .remote_handles(remote)
+            .into_iter()
+            .find(|h| h.vol.root() == local_root)
+        {
+            return h;
+        }
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let vol = Arc::new(Volume::new(
+            Index::new(local_root, Meta::dir(0)),
+            fs_type,
+            Checkpoint::default(),
+        ));
+        let source = format!("remote:{remote}");
+        let snapshot = self
+            .cfg
+            .state_dir
+            .join(format!("remote-{remote}@{}", snapshot_name(local_root)));
+        restore(&vol, &snapshot, &source);
+        vol.update_status(|s| {
+            s.watch = evos_scan::volume::WatchMode::Remote;
+            s.phase = evos_scan::volume::Phase::Starting;
+        });
+        let handle = Arc::new(VolumeHandle {
+            id,
+            vol,
+            network: true,
+            source,
+            remote: Some(remote.to_owned()),
+            remote_root: server_root.to_vec(),
+            snapshot,
+            saved_generation: AtomicU64::new(u64::MAX),
+            thread: Mutex::new(None),
+            sizes: Mutex::new(None),
+        });
+        tracing::info!(id, remote, root = %String::from_utf8_lossy(local_root), "attaching remote copy");
+        self.volumes.write().push(handle.clone());
+        handle
+    }
+
+    /// Detaches a remote copy and deletes its saved copy.
+    pub fn forget_remote(&self, id: u16) {
+        let Some(handle) = self.get(id) else { return };
+        self.volumes.write().retain(|h| h.id != id);
+        handle.vol.stop();
+        let _ = std::fs::remove_file(&handle.snapshot);
+    }
+
+    /// Saved copies of a remote index's volumes, from earlier runs.
+    pub fn saved_remote_copies(&self, remote: &str) -> Vec<Vec<u8>> {
+        let prefix = format!("remote-{remote}@");
+        let Ok(dir) = std::fs::read_dir(&self.cfg.state_dir) else {
+            return Vec::new();
+        };
+        dir.flatten()
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                root_of_snapshot_name(name.strip_prefix(&prefix)?)
+            })
+            .collect()
     }
 
     /// Stops a volume's driver, saves it and removes it.
@@ -469,6 +582,9 @@ mod tests {
         assert_eq!(snapshot_name(b"/mnt/evos/nas"), "mnt-evos-nas.idx");
         assert_eq!(snapshot_name(b"/mnt/a b"), "mnt-a%20b.idx");
         assert_ne!(snapshot_name(b"/a-b"), snapshot_name(b"/a/b"));
+        for root in [&b"/"[..], b"/net/pc/home", b"/a-b/c d", "/נ/ש".as_bytes()] {
+            assert_eq!(root_of_snapshot_name(&snapshot_name(root)).unwrap(), root);
+        }
     }
 
     #[test]

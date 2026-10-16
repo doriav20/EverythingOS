@@ -11,22 +11,27 @@ use evos_proto::{ErrorCode, Event, Request, Response};
 use crate::auth;
 use crate::server::{blocking, Daemon, Peer};
 
-/// Is the peer allowed to change mounts? Root always is; others need the
-/// polkit action, usually an administrator password via their agent.
-async fn authorize(peer: &Peer) -> Result<(), String> {
+/// Is the peer allowed to perform a polkit `action`? Root always is;
+/// others need the action, usually an administrator password via their
+/// agent.
+pub(crate) async fn authorize(peer: &Peer, action: &str) -> Result<(), String> {
     if peer.caller.is_root() {
         return Ok(());
     }
     let Some(pid) = peer.pid else {
         return Err("cannot identify the calling process".into());
     };
-    match auth::polkit_authorized(pid, peer.caller.uid, auth::MANAGE_MOUNTS).await {
+    let what = if action == auth::MANAGE_SERVERS {
+        "servers and remote indexes"
+    } else {
+        "mounts"
+    };
+    match auth::polkit_authorized(pid, peer.caller.uid, action).await {
         Ok(true) => Ok(()),
-        Ok(false) => Err(
-            "not authorized to manage mounts (run with sudo, or from a desktop \
-                          session with a polkit agent)"
-                .into(),
-        ),
+        Ok(false) => Err(format!(
+            "not authorized to manage {what} (run with sudo, or from a desktop \
+             session with a polkit agent)"
+        )),
         Err(e) => Err(format!(
             "cannot check authorization: {e}; run with sudo instead"
         )),
@@ -48,7 +53,7 @@ fn error_response(e: MountError) -> Response {
 /// Handles the mount family of requests.
 pub async fn handle(daemon: &Arc<Daemon>, peer: &Peer, request: Request) -> Response {
     if !matches!(request, Request::Mounts) {
-        if let Err(message) = authorize(peer).await {
+        if let Err(message) = authorize(peer, auth::MANAGE_MOUNTS).await {
             return Response::Error {
                 code: ErrorCode::PermissionDenied,
                 message,

@@ -8,8 +8,10 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap = { version = "4", features = ["derive", "env"] }
 evos-core.workspace = true
+evos-etp.workspace = true
 evos-mount.workspace = true
 evos-proto.workspace = true
 evos-scan.workspace = true
@@ -17,6 +19,8 @@ libc = "0.2"
 parking_lot = "0.12"
 sd-notify = "0.4"
 serde.workspace = true
+sha2 = "0.10"
+socket2 = "0.5"
 toml = "0.8"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tracing.workspace = true

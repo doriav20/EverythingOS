@@ -12,7 +12,9 @@ use evos_scan::mountinfo::MountWatcher;
 
 use crate::config::Config;
 use crate::history::RunHistory;
+use crate::remote::RemoteManager;
 use crate::server::{serve, spawn_event_ticker, Daemon};
+use crate::servers::ServerManager;
 use crate::volumes::VolumeManager;
 
 /// Runs the daemon until SIGTERM or SIGINT.
@@ -35,10 +37,13 @@ pub fn run(cfg: Config) -> Result<(), String> {
     );
     let volumes = Arc::new(VolumeManager::new(cfg.clone(), mounts.clone()));
     let history = Arc::new(RunHistory::load(cfg.state_dir.join("run-history")));
+    let servers = Arc::new(ServerManager::load(&cfg.config_dir));
+    let remotes = Arc::new(RemoteManager::open(&cfg.config_dir, volumes.clone()));
 
     // Mount managed shares first so they are indexed from the start.
     mounts.supervise();
     volumes.sync();
+    remotes.start();
 
     let stop = Arc::new(AtomicBool::new(false));
     let threads = vec![
@@ -74,19 +79,27 @@ pub fn run(cfg: Config) -> Result<(), String> {
             volumes: volumes.clone(),
             mounts: mounts.clone(),
             history: history.clone(),
+            servers: servers.clone(),
+            remotes: remotes.clone(),
             events,
         });
         spawn_event_ticker(daemon.clone());
+        // A server that cannot start (port taken) must not stop searching.
+        if let Err(e) = servers.restart(&daemon).await {
+            tracing::warn!("{e}");
+        }
         let server = tokio::spawn(serve(daemon, listener));
         let _ = sd_notify::notify(false, &[sd_notify::NotifyState::Ready]);
         tracing::info!(socket = %cfg.socket.display(), "evosd {} ready", env!("CARGO_PKG_VERSION"));
         shutdown_signal().await;
         server.abort();
+        servers.stop();
         Ok::<(), String>(())
     });
 
     tracing::info!("shutting down");
     let _ = sd_notify::notify(false, &[sd_notify::NotifyState::Stopping]);
+    remotes.shutdown();
     // Join the background threads first so none of them re-attaches a
     // volume while the others are being saved.
     stop.store(true, Ordering::Relaxed);

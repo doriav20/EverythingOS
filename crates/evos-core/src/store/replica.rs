@@ -63,6 +63,14 @@ impl Index {
         self.generation += 1;
     }
 
+    /// Replaces this index with a new copy. The epoch moves on, so result
+    /// sets taken from the old copy are recognized as stale.
+    pub fn replace_with(&mut self, mut new: Index) {
+        new.epoch = self.epoch + 1;
+        new.generation = self.generation + 1;
+        *self = new;
+    }
+
     /// A copy with the same ids in which only the entries `keep` accepts
     /// (and the folders above them) are alive; all others are tombstones
     /// without names.
@@ -358,5 +366,15 @@ mod tests {
         assert!(delta.entries.iter().all(|e| !e.alive && e.name.is_empty()));
         replica.apply_delta(&delta);
         assert_eq!(paths(&replica), ["/srv/docs", "/srv/docs/שלום.txt"]);
+    }
+
+    #[test]
+    fn replacing_a_copy_moves_its_epoch_on() {
+        let mut replica = source();
+        let (epoch, generation) = (replica.epoch(), replica.generation());
+        replica.replace_with(Index::new(b"/srv", Meta::dir(0)));
+        assert_eq!(replica.epoch(), epoch + 1, "old result sets are stale");
+        assert!(replica.generation() > generation);
+        assert_eq!(replica.live_count(), 1);
     }
 }

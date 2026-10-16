@@ -70,6 +70,18 @@ pub fn read_bytes(path: &[u8], limit: u64) -> io::Result<Vec<u8>> {
     Ok(data)
 }
 
+/// Reads up to `limit` bytes of a file from `offset` (as [`read_bytes`]).
+pub fn read_range(path: &[u8], offset: u64, limit: u64) -> io::Result<Vec<u8>> {
+    use std::io::{Seek, SeekFrom};
+    let mut file = open_readonly(path)?;
+    if offset > 0 {
+        file.seek(SeekFrom::Start(offset))?;
+    }
+    let mut data = Vec::new();
+    file.take(limit).read_to_end(&mut data)?;
+    Ok(data)
+}
+
 /// Reads up to `limit` bytes of a file as text (see [`decode_text`]).
 pub fn read_content(path: &[u8], limit: u64) -> io::Result<Vec<u8>> {
     Ok(decode_text(read_bytes(path, limit)?))
@@ -259,6 +271,16 @@ mod tests {
             before,
             "O_NOATIME keeps the access time"
         );
+    }
+
+    #[test]
+    fn ranges_of_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("digits.txt");
+        std::fs::write(&f, "0123456789").unwrap();
+        assert_eq!(read_range(&b(&f), 3, 4).unwrap(), b"3456");
+        assert_eq!(read_range(&b(&f), 8, 100).unwrap(), b"89");
+        assert_eq!(read_range(&b(&f), 50, 10).unwrap(), b"");
     }
 
     #[test]

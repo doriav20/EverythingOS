@@ -72,6 +72,10 @@ fn main() -> glib::ExitCode {
 
     let (open, list, prefs) = (open_window.clone(), windows.clone(), settings.clone());
     app.connect_startup(move |app| {
+        // Copies of other computers' files opened a while ago.
+        std::thread::spawn(|| {
+            evos_gtk::backend::clean_cache(std::time::Duration::from_secs(7 * 86400))
+        });
         let about = gio::SimpleAction::new("about", None);
         let a = app.clone();
         about.connect_activate(move |_, _| {

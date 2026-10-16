@@ -311,6 +311,39 @@ impl Backend {
     }
 }
 
+fn remote_cache() -> PathBuf {
+    glib::user_cache_dir().join("evos").join("remote")
+}
+
+/// Deletes copies of remote files opened more than `age` ago.
+pub fn clean_cache(age: Duration) {
+    clean_dir(&remote_cache(), age);
+}
+
+fn clean_dir(dir: &Path, age: Duration) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if meta.is_dir() {
+            clean_dir(&path, age);
+            // Only empty folders go.
+            let _ = std::fs::remove_dir(&path);
+        } else if meta
+            .modified()
+            .ok()
+            .and_then(|m| m.elapsed().ok())
+            .is_some_and(|e| e > age)
+        {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
 /// Where a copy of a remote file is kept for opening: a folder per file
 /// path, so the copy keeps its name.
 pub fn cache_path(path: &[u8], name: &str) -> PathBuf {
@@ -327,9 +360,7 @@ pub fn cache_path(path: &[u8], name: &str) -> PathBuf {
             }
         })
         .collect();
-    glib::user_cache_dir()
-        .join("evos")
-        .join("remote")
+    remote_cache()
         .join(format!("{:016x}", h.finish()))
         .join(if name.is_empty() { "file".into() } else { name })
 }
@@ -344,6 +375,27 @@ mod tests {
         assert_eq!(describe(&r), "me@pc:2121");
         let r = RemoteSearch::parse("10.0.0.5").unwrap();
         assert_eq!(describe(&r), "10.0.0.5");
+    }
+
+    #[test]
+    fn old_copies_are_cleaned() {
+        let tmp = tempfile::tempdir().unwrap();
+        let old = tmp.path().join("a/old.txt");
+        let new = tmp.path().join("b/new.txt");
+        for f in [&old, &new] {
+            std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+            std::fs::write(f, "x").unwrap();
+        }
+        let week_ago = std::time::SystemTime::now() - Duration::from_secs(8 * 86400);
+        std::fs::File::options()
+            .write(true)
+            .open(&old)
+            .unwrap()
+            .set_modified(week_ago)
+            .unwrap();
+        clean_dir(tmp.path(), Duration::from_secs(7 * 86400));
+        assert!(!old.exists() && !old.parent().unwrap().exists());
+        assert!(new.exists());
     }
 
     #[test]

@@ -5,6 +5,7 @@ members = [
     "crates/evos-scan",
     "crates/evos-mount",
     "crates/evos-proto",
+    "crates/evos-etp",
     "crates/evosd",
     "crates/evos-cli",
     "crates/evos-gtk",
@@ -22,6 +23,7 @@ evos-core = { path = "crates/evos-core" }
 evos-scan = { path = "crates/evos-scan" }
 evos-mount = { path = "crates/evos-mount" }
 evos-proto = { path = "crates/evos-proto" }
+evos-etp = { path = "crates/evos-etp" }
 
 anyhow = "1"
 thiserror = "2"

@@ -1,0 +1,13 @@
+[package]
+name = "evos-etp"
+description = "Everything's ETP protocol (FTP with the EVERYTHING extension): types, formats and a client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+evos-core.workspace = true
+evos-proto.workspace = true
+thiserror.workspace = true

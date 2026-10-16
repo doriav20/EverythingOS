@@ -625,6 +625,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "evos-etp"
+version = "0.1.0"
+dependencies = [
+ "evos-core",
+ "evos-proto",
+ "thiserror",
+]
+
+[[package]]
 name = "evos-gtk"
 version = "0.1.0"
 dependencies = [

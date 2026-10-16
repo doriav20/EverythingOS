@@ -1,4 +1,5 @@
-//! Preferences: indexed volumes and managed mounts.
+//! Preferences: indexed volumes, managed mounts, remote indexes and the
+//! network servers.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -40,7 +41,7 @@ pub fn show(parent: &impl IsA<gtk::Widget>, backend: &Backend) {
     dialog.set_title("Preferences");
     // Rows with wrapping subtitles have a tiny natural width; give the
     // dialog a real size instead of shrinking to it.
-    dialog.set_content_width(680);
+    dialog.set_content_width(800);
     dialog.set_content_height(560);
 
     let volumes = adw::PreferencesGroup::builder()
@@ -72,6 +73,8 @@ pub fn show(parent: &impl IsA<gtk::Widget>, backend: &Backend) {
 
     dialog.add(&volume_page);
     dialog.add(&mount_page);
+    dialog.add(&crate::prefs_remote::page(&dialog, backend));
+    dialog.add(&crate::prefs_servers::page(&dialog, backend));
 
     let prefs = Rc::new(Prefs {
         dialog: dialog.clone(),

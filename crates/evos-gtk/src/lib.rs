@@ -9,6 +9,8 @@ pub mod export;
 pub mod format;
 pub mod model;
 pub mod prefs;
+pub mod prefs_remote;
+pub mod prefs_servers;
 pub mod preview;
 pub mod row_item;
 pub mod settings;

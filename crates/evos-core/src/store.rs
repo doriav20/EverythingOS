@@ -14,6 +14,9 @@ use hashbrown::{DefaultHashBuilder, HashTable};
 
 use crate::fold::fold_into;
 
+mod replica;
+pub use replica::{Delta, DeltaEntry};
+
 /// Dense identifier of an entry inside one [`Index`].
 pub type EntryId = u32;
 
@@ -434,6 +437,8 @@ impl Index {
             self.unhash(cur);
             let i = cur as usize;
             self.flags[i] |= FLAG_DELETED;
+            // Replicas learn about removals through this stamp.
+            self.changed[i] = now_ns();
             self.first_child[i] = NO_ENTRY;
             self.garbage_bytes += self.name_len[i] as usize + self.fold_len[i] as usize;
             removed += 1;

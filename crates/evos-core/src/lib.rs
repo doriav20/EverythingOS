@@ -13,4 +13,6 @@ pub mod store;
 pub mod types;
 pub mod wildcard;
 
-pub use store::{EntryId, Index, ListedEntry, ListingOutcome, Meta, NO_ENTRY, ROOT};
+pub use store::{
+    Delta, DeltaEntry, EntryId, Index, ListedEntry, ListingOutcome, Meta, NO_ENTRY, ROOT,
+};

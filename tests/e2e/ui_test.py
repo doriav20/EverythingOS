@@ -13,8 +13,10 @@ status bar, the preview pane and dialogs.
                                  an SMB share mounted from Preferences
 """
 
+import glob
 import os
 import re
+import socket
 import subprocess
 import sys
 import time
@@ -26,6 +28,9 @@ from gi.repository import Atspi  # noqa: E402
 
 WINDOW = "/org/evos/Search/window/1"
 failures = 0
+# The window the checks look at and click in (its frame), when several
+# are open; None means the first.
+SCOPE = None
 
 
 def check(ok, what):
@@ -83,7 +88,7 @@ def showing(node):
 
 def find_all(role=None, name=None, root=None, visible=True):
     out = []
-    for n in walk(root or app()):
+    for n in walk(root or SCOPE or app()):
         try:
             if role and n.get_role_name() != role:
                 continue
@@ -180,12 +185,12 @@ def remote(*args):
     subprocess.run(["evos-gtk", *args], check=True, timeout=30)
 
 
-def action(name, param=None):
+def action(name, param=None, window=WINDOW):
     """Activates a window action over D-Bus, as a menu item would."""
     params = "[]" if param is None else "[<%s>]" % gvariant_string(param)
     subprocess.run(
         ["gdbus", "call", "--session", "--dest", "org.evos.Search",
-         "--object-path", WINDOW, "--method", "org.gtk.Actions.Activate",
+         "--object-path", window, "--method", "org.gtk.Actions.Activate",
          name, params, "{}"],
         check=True, stdout=subprocess.DEVNULL, timeout=30,
     )
@@ -196,9 +201,10 @@ def gvariant_string(s):
 
 
 def window_origin():
-    """Screen position of the first search window."""
+    """Screen position of the search window looked at."""
+    title = SCOPE.get_name() if SCOPE is not None else "EverythingOS"
     out = subprocess.run(
-        ["xdotool", "search", "--name", "^EverythingOS$", "getwindowgeometry"],
+        ["xdotool", "search", "--name", "^" + re.escape(title) + "$", "getwindowgeometry"],
         capture_output=True, text=True,
     ).stdout
     m = re.search(r"Position: (-?\d+),(-?\d+)", out)
@@ -521,6 +527,7 @@ def local(disk, ro):
 
     guarded(keyboard_and_mouse, disk, settings_file)
     guarded(mounts_in_preferences, disk)
+    guarded(servers_and_etp, disk)
     guarded(service_restart)
 
     remote("-new-window", "-s", "report")
@@ -777,6 +784,224 @@ def service_restart():
                      start_new_session=True)
     check(wait(lambda: not banner_showing() and total() == 2, timeout=30),
           "the window reconnects when the service is back")
+
+
+def port_open(port):
+    try:
+        socket.create_connection(("127.0.0.1", port), timeout=1).close()
+        return True
+    except OSError:
+        return False
+
+
+def frame_named(title):
+    for f in find_all("frame", root=app()):
+        if (f.get_name() or "") == title:
+            return f
+    return None
+
+
+def window_paths():
+    """D-Bus paths of the open search windows."""
+    out = subprocess.run(
+        ["gdbus", "introspect", "--session", "--dest", "org.evos.Search",
+         "--object-path", "/org/evos/Search/window"], capture_output=True, text=True).stdout
+    return ["/org/evos/Search/window/" + n for n in re.findall(r"node (\d+)", out)]
+
+
+def toggle_on(title, root):
+    box = wait(lambda: find_named(title, ("check box",), root=root))
+    if box is not None and not box.get_state_set().contains(Atspi.StateType.CHECKED):
+        press(box)
+    return box
+
+
+def set_text(title, text, root):
+    """Replaces the text of the first entry with this title."""
+    node = wait(lambda: find_named(title, ("text", "password text"), root=root), timeout=5)
+    if node is None:
+        return False
+    click_node(node)
+    key("ctrl+a")
+    type_text(text)
+    return True
+
+
+def set_spin(node, value):
+    """Sets a spin button the way assistive technology does."""
+    if node is None:
+        return False
+    try:
+        if Atspi.Value.set_current_value(node, float(value)):
+            return True
+    except Exception:
+        pass
+    click_node(node)
+    key("ctrl+a")
+    type_text(str(value))
+    key("Tab")
+    return True
+
+
+def labels_in(root):
+    return [n.get_name() or "" for n in find_all("label", root=root)]
+
+
+def etp_count(server, query):
+    out = subprocess.run(["evos", "--etp", server, "--count", query],
+                         capture_output=True, text=True)
+    return int(out.stdout.strip() or -1)
+
+
+def servers_and_etp(disk):
+    """The servers set up in Preferences, a remote index added there, and
+    File > Connect to ETP Server searching a server in its own window."""
+    global SCOPE
+    port, login = 2121, "gui:gui-pass@127.0.0.1:2121"
+    settings_file = os.path.join(os.environ["XDG_CONFIG_HOME"], "evos", "evos-gtk.ini")
+    try:
+        app_action("preferences")
+        tab = wait(lambda: find_named("Servers", ("toggle button", "push button", "page tab")))
+        if not check(tab is not None, "Preferences has a Servers page"):
+            close_dialog()
+            return
+        press(tab)
+        d = wait(lambda: dialogs()[0] if dialogs() else None)
+        check(toggle_on("Enable ETP/FTP server", d) is not None, "the ETP/FTP server switch")
+        set_text("User name (empty: any)", "gui", d)
+        toggle_on("Require a password", d)
+        check(set_text("Password", "gui-pass", d), "a password field appears with its switch")
+        set_text("Listen on (addresses separated by commas; empty: all)", "127.0.0.1", d)
+        spins = find_all("spin button", root=d)
+        set_spin(spins[0] if spins else None, port)
+        press(find_named("Apply", ("push button",), root=d))
+        check(wait(lambda: port_open(port), timeout=15),
+              f"Apply starts the ETP server [{labels_in(d)[-3:]}]")
+        check(wait(lambda: etp_count(login, "report") == 2),
+              "the ETP server answers with the login set in Preferences")
+        check(wait(lambda: find_named("New password (empty keeps the current one)",
+                                      ("text", "password text"), root=d) is not None),
+              "the page shows that a password is set, never the password")
+        close_dialog()
+
+        app_action("preferences")
+        tab = wait(lambda: find_named("Remote Indexes", ("toggle button", "push button", "page tab")))
+        if check(tab is not None, "Preferences has a Remote Indexes page"):
+            press(tab)
+            press(wait(lambda: find_named("Add Remote Index", ("push button",))))
+            d = wait(lambda: dialogs()[0] if dialogs() else None)
+            set_text("Name", "gui-copy", d)
+            kind = wait(lambda: find_named("Type", ("combo box",), root=d))
+            click_node(kind)
+            time.sleep(0.5)
+            key("Down", "Return")  # Everything (ETP)
+            time.sleep(0.3)
+            set_text("Host", "127.0.0.1", d)
+            spins = find_all("spin button", root=d)
+            set_spin(spins[0] if spins else None, port)
+            set_text("User name", "gui", d)
+            set_text("Password", "gui-pass", d)
+            press(find_named("Test Connection", ("push button",), root=d))
+            check(wait(lambda: any(l.startswith("Connection works") for l in labels_in(d))),
+                  f"Test Connection reaches the ETP server {labels_in(d)[-4:]}")
+            press(find_named("Add", ("push button",), root=d))
+            check(wait(lambda: evos_count('under:/net/gui-copy "q1 report.pdf"') == 1, timeout=60),
+                  "a remote index added in Preferences is copied")
+            check(wait(lambda: any("shown under /net/gui-copy" in l and "live" in l
+                                   for l in labels_in(d)), timeout=20),
+                  "its row shows where it is and that it is live")
+            if remove_mount("gui-copy"):
+                check(wait(lambda: evos_count("under:/net/gui-copy") == 0, timeout=30),
+                      "removing it removes the copy")
+        close_dialog()
+
+        app_action("connect")
+        d = wait(lambda: dialogs()[0] if dialogs() else None)
+        check(d is not None, "File > Connect to ETP Server opens the dialog")
+        set_text("Host", "127.0.0.1", d)
+        spins = find_all("spin button", root=d)
+        set_spin(spins[0] if spins else None, port)
+        set_text("User name", "gui", d)
+        set_text("Password", "wrong", d)
+        press(find_named("Connect", ("push button",), root=d))
+        check(wait(lambda: any("Login or password incorrect" in l for l in labels_in(d))),
+              f"a wrong password is reported in the dialog {labels_in(d)[-3:]}")
+        set_text("Password", "gui-pass", d)
+        press(find_named("Connect", ("push button",), root=d))
+        title = "gui@127.0.0.1:2121 — EverythingOS"
+        frame = wait(lambda: frame_named(title))
+        if not check(frame is not None, "Connect opens a window searching the server"):
+            return
+        SCOPE = frame
+        win = window_paths()[-1]
+        check(wait(lambda: find_named("Searching gui@127.0.0.1:2121", ("push button", "toggle button"))
+                   is not None), "its header shows the server")
+        remote("-s", "report")
+        check(wait(lambda: names() == ["q1 report.pdf", "q2 report.pdf"]),
+              f"its results come from the server {names()}")
+        check(wait(lambda: "Searching gui@127.0.0.1:2121" in labels_in(None)),
+              "its status bar says which server it searches")
+
+        remote("-preview", "-s", "notes.md")
+        wait(lambda: names() == ["notes.md"])
+        click_row(0)
+        check(wait(lambda: preview_text().startswith("TODO: buy milk")),
+              "the preview shows a file of the other computer")
+        cache = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+        for old in glob.glob(os.path.join(cache, "evos", "remote", "*", "notes.md")):
+            os.chmod(old, 0o644)
+            os.remove(old)
+        action("open", window=win)
+
+        def copy():
+            hits = glob.glob(os.path.join(cache, "evos", "remote", "*", "notes.md"))
+            return hits and open(hits[0]).read().startswith("TODO") and hits[0]
+        copied = wait(copy)
+        check(bool(copied) and os.stat(copied).st_mode & 0o222 == 0,
+              "opening a file of the other computer opens a read-only copy")
+        if wait(lambda: dialog_labels() is not None, timeout=5):
+            close_dialog()  # nothing in the container opens Markdown
+
+        remote("-no-preview", "-s", "folder:docs")
+        wait(lambda: names() == ["docs"])
+        click_row(0)
+        action("open", window=win)
+        check(wait(lambda: {"notes.md", "q1 report.pdf"} <= set(names())),
+              f"opening a folder of the other computer lists it in the window {names()[:4]}")
+        click_row(0)
+        key("ctrl+c")
+        check(wait(lambda: clipboard().startswith(disk + "/docs/")),
+              "Ctrl+C copies the paths of results on another computer")
+
+        action("disconnect", window=win)
+        check(wait(lambda: find_named("Searching gui@127.0.0.1:2121", ("push button", "toggle button")) is None),
+              "File > Disconnect goes back to this computer's index")
+        remote("-s", "report")
+        check(wait(lambda: names() == ["q1 report.pdf", "q2 report.pdf"] and
+                   any(re.match(r"^\d+ volumes? up to date", l) for l in labels_in(None))),
+              "and searches this computer again")
+        action("close", window=win)
+        SCOPE = None
+        check(wait(lambda: frame_named(title) is None), "the window closes")
+        text = open(settings_file, encoding="utf-8").read()
+        check("gui@127.0.0.1:2121" in text and "gui-pass" not in text,
+              "recent servers are remembered without their passwords")
+
+        remote("-connect", login, "-s", "report")
+        frame = wait(lambda: frame_named(title))
+        if check(frame is not None, "evos-gtk -connect opens a window searching a server"):
+            SCOPE = frame
+            check(wait(lambda: names() == ["q1 report.pdf", "q2 report.pdf"]),
+                  "and runs the search there")
+            action("close", window=window_paths()[-1])
+    finally:
+        SCOPE = None
+        subprocess.run(["evos", "server", "disable", "etp"], capture_output=True)
+        for path in window_paths()[1:]:
+            subprocess.run(["gdbus", "call", "--session", "--dest", "org.evos.Search",
+                            "--object-path", path, "--method", "org.gtk.Actions.Activate",
+                            "close", "[]", "{}"], capture_output=True)
+        wait(lambda: len(find_all("frame", root=app())) == 1, timeout=10)
 
 
 def share(root, name):

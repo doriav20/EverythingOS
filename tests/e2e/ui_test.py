@@ -870,7 +870,11 @@ def servers_and_etp(disk):
         check(toggle_on("Enable ETP/FTP server", d) is not None, "the ETP/FTP server switch")
         set_text("User name (empty: any)", "gui", d)
         toggle_on("Require a password", d)
-        check(set_text("Password", "gui-pass", d), "a password field appears with its switch")
+        # A password set earlier (by another suite) shows as a field for a
+        # new one.
+        check(set_text("Password", "gui-pass", d) or
+              set_text("New password (empty keeps the current one)", "gui-pass", d),
+              "a password field appears with its switch")
         set_text("Listen on (addresses separated by commas; empty: all)", "127.0.0.1", d)
         spins = find_all("spin button", root=d)
         set_spin(spins[0] if spins else None, port)

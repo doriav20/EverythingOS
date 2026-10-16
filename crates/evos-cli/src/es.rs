@@ -92,6 +92,7 @@ const LONG_OPTIONS: &[&str] = &[
     "parent",
     "filter",
     "filelist",
+    "etp",
     // results
     "offset",
     "max-results",

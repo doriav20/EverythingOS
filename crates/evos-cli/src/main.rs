@@ -8,6 +8,7 @@ mod es;
 mod filelist;
 mod mount;
 mod output;
+mod servers;
 
 use std::fs::File;
 use std::io::{self, BufWriter, IsTerminal, Write};
@@ -63,6 +64,12 @@ enum Command {
     /// Manage mounted shares and folders.
     #[command(subcommand)]
     Mount(Box<mount::MountCommand>),
+    /// Manage the ETP/FTP, HTTP and index servers.
+    #[command(subcommand)]
+    Server(Box<servers::ServerCommand>),
+    /// Manage remote indexes: copies of other computers' indexes.
+    #[command(subcommand)]
+    Remote(Box<servers::RemoteCommand>),
 }
 
 #[derive(Copy, Clone, ValueEnum)]
@@ -122,6 +129,15 @@ struct SearchArgs {
     /// Search an Everything file list (.efu) instead of the index.
     #[arg(long, value_name = "FILE", help_heading = "Scope")]
     filelist: Option<PathBuf>,
+    /// Search an ETP server instead: Everything or EverythingOS on another
+    /// computer, as [user[:password]@]host[:port].
+    #[arg(
+        long,
+        value_name = "SERVER",
+        help_heading = "Scope",
+        conflicts_with = "filelist"
+    )]
+    etp: Option<String>,
 
     /// Skip this many results.
     #[arg(short = 'o', long, default_value_t = 0, help_heading = "Results")]
@@ -280,6 +296,8 @@ fn main() -> ExitCode {
             run_count(&cli.socket, &path, change, true)
         }
         Some(Command::Mount(cmd)) => mount::run(&cli.socket, *cmd),
+        Some(Command::Server(cmd)) => servers::run_server(&cli.socket, *cmd),
+        Some(Command::Remote(cmd)) => servers::run_remote(&cli.socket, *cmd),
     };
     match result {
         Ok(code) => code,
@@ -559,6 +577,11 @@ fn run_search(
         }
         None => {
             let mut client = connect(socket)?;
+            if let Some(server) = &args.etp {
+                let target = evos_proto::RemoteSearch::parse(server)
+                    .ok_or_else(|| Failure::Usage(format!("not a server: {server:?}")))?;
+                client.connect_remote(target)?;
+            }
             let found = client.search(&query, args.options(), sort)?;
             (
                 Source::Daemon {

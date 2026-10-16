@@ -381,8 +381,14 @@ async fn handle(
             Response::RemoteIndexes(blocking(move || d.remotes.list()).await)
         }
         Request::RemoteIndexTest { spec, password } => {
-            let password = password.unwrap_or_default();
-            match blocking(move || RemoteManager::test(&spec, &password)).await {
+            let d = daemon.clone();
+            let test = move || {
+                let password = password
+                    .or_else(|| d.remotes.stored_password(&spec))
+                    .unwrap_or_default();
+                RemoteManager::test(&spec, &password)
+            };
+            match blocking(test).await {
                 Ok(server) => Response::Connected { server },
                 Err(e) => failure((ErrorCode::Failed, e)),
             }

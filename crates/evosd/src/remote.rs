@@ -547,6 +547,19 @@ impl RemoteManager {
         Ok(())
     }
 
+    /// The stored password of a remote index, if `spec` is still about the
+    /// same server and account: it is never sent anywhere else.
+    pub fn stored_password(&self, spec: &RemoteIndexSpec) -> Option<String> {
+        let same = self.remotes.lock().get(&spec.name).is_some_and(|r| {
+            r.spec.kind == spec.kind
+                && r.spec.host == spec.host
+                && r.spec.port() == spec.port()
+                && r.spec.username == spec.username
+        });
+        same.then(|| std::fs::read_to_string(self.password_file(&spec.name)).ok())
+            .flatten()
+    }
+
     /// Connects once with these settings.
     pub fn test(spec: &RemoteIndexSpec, password: &str) -> Result<String, String> {
         spec.validate()?;

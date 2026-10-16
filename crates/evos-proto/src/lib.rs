@@ -290,9 +290,13 @@ impl Row {
         if self.folder.is_empty() {
             return self.name.clone();
         }
+        // Results from a Windows computer (through ETP) keep its paths.
+        let windows = (self.folder.get(1) == Some(&b':') && !self.folder.contains(&b'/'))
+            || self.folder.starts_with(b"\\\\");
+        let sep = if windows { b'\\' } else { b'/' };
         let mut p = self.folder.clone();
-        if p.last() != Some(&b'/') {
-            p.push(b'/');
+        if p.last() != Some(&sep) {
+            p.push(sep);
         }
         p.extend_from_slice(&self.name);
         p

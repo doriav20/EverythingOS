@@ -9,20 +9,23 @@
 #   features  the search syntax, other scripts, content, properties, run
 #             history, exports, live updates and per-user filtering
 #   readonly  indexing and searching change nothing, not even access times
+#   servers   the ETP/FTP, HTTP and index servers and remote indexes, used
+#             by independent clients
 #   ui        the desktop client, driven and read through accessibility
 #   network   real SMB and NFS servers (needs the test profile's services)
 #
-# The first three need only a privileged container; they index two tmpfs
+# All but network need only a privileged container; they index two tmpfs
 # volumes with their own daemon.
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 . tests/e2e/lib.sh
 . tests/e2e/features.sh
 . tests/e2e/readonly.sh
+. tests/e2e/servers.sh
 . tests/e2e/ui.sh
 . tests/e2e/network.sh
 
-SUITES=" ${*:-features readonly ui network} "
+SUITES=" ${*:-features readonly servers ui network} "
 want() { [[ $SUITES == *" $1 "* ]]; }
 
 section "building"
@@ -31,7 +34,7 @@ want ui && packages+=(-p evos-gtk)
 cargo build -q --release "${packages[@]}" || exit 1
 export PATH=/target/release:$PATH
 
-if want features || want readonly || want ui; then
+if want features || want readonly || want servers || want ui; then
     LOCAL=/tmp/e2e-local
     umount "$LOCAL/disk" "$LOCAL/ro" 2>/dev/null
     rm -rf "$LOCAL"
@@ -59,6 +62,7 @@ EOF
     wait_for 10 evos status || { echo "daemon did not start"; cat "$LOCAL/evosd.log"; exit 1; }
 
     want features && run_features
+    want servers && run_servers
     if want ui; then
         section "desktop client"
         if start_ui; then

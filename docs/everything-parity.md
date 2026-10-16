@@ -108,12 +108,15 @@ All modifiers have `no` forms (`nocase:`) and can be made global with `?` (`?cas
 | File list indexes | ◐ | searched from the command line |
 | Database saved across restarts | ✓ | snapshots in `/var/lib/evos`; `-save-db`, Tools → Save Index Now |
 | Force rebuild / rescan | ✓ | `-reindex`, Tools → Rescan All Volumes |
-| ETP and HTTP servers | ✗ | |
+| ETP/FTP server | ✓ | Everything's ETP protocol (as in voidtools' etp_server) plus read-only FTP; Preferences → Servers, `evos server enable etp` |
+| HTTP server | ✓ | search pages, folder listings, downloads with ranges, `/?search=…&json=1`; Preferences → Servers, `evos server enable http` |
+| Connect to ETP Server | ✓ | File → Connect to ETP Server and `-connect` open a window searching the server; `evos --etp` |
+| Everything Server, remote indexes | ◐ | Everything Server's protocol is unpublished. EverythingOS's index server (port 14630) lets other EverythingOS computers keep live copies (changes only); Everything on Windows is copied as a remote index over ETP. Preferences → Remote Indexes, `evos remote add` |
 | Run as a service, results limited by user permissions | ✓ | `evosd`; results are filtered by each user's permissions |
 
 ## Command lines
 
 `evos-gtk` takes Everything.exe's options with one or two dashes, and passes them to the running window:
-`-s` / `-search`, `-search*`, a bare search, `-filter`, `-sort` with `-ascending`/`-descending`, `-sort-ascending`, `-sort-descending`, `-case` `-diacritics` `-ww` `-regex` `-match-path` `-prefix` `-suffix` `-ignore-punctuation` `-ignore-white-space` and their `-no-` forms, `-p` / `-path`, `-parent`, `-bookmark`, `-columns`, `-add-columns`, `-remove-columns`, `-preview`, `-status-bar`, `-new-window`, `-toggle-window`, `-focus-results`, `-focus-search-edit`, `-maximize`, `-minimize`, `-fullscreen`, `-home`, `-close`, `-exit`, `-reindex`, `-rescan-all`, `-save-db`. Window placement (`-x`, `-y`, `-width`, `-height`), themes, sidebars, tabs, ETP and installation options are not supported.
+`-s` / `-search`, `-search*`, a bare search, `-filter`, `-sort` with `-ascending`/`-descending`, `-sort-ascending`, `-sort-descending`, `-case` `-diacritics` `-ww` `-regex` `-match-path` `-prefix` `-suffix` `-ignore-punctuation` `-ignore-white-space` and their `-no-` forms, `-p` / `-path`, `-parent`, `-bookmark`, `-columns`, `-add-columns`, `-remove-columns`, `-preview`, `-status-bar`, `-new-window`, `-connect`, `-toggle-window`, `-focus-results`, `-focus-search-edit`, `-maximize`, `-minimize`, `-fullscreen`, `-home`, `-close`, `-exit`, `-reindex`, `-rescan-all`, `-save-db`. Window placement (`-x`, `-y`, `-width`, `-height`), themes, sidebars, tabs and installation options are not supported.
 
 `evos` follows es.exe: single-dash long options, `-r` `-i` `-w` `-p` `-a` and the other match options, `-o` `-n`, `-path` `-parent-path` `-parent`, DIR-style `/a[-]X` and `/o[-]X`, `-s`, `-sort NAME[-ascending|-descending]` and `-sort-NAME`, the column options in the order given, `-csv` `-tsv` `-efu` `-txt` `-m3u` `-m3u8` and their `-export-*` forms, `-no-header`, `-double-quote`, `-size-format`, `-date-format`, `-highlight`, `-get-result-count`, `-get-total-size`, `-get-run-count`, `-inc-run-count`, `-set-run-count`, `-save-db`, `-reindex`, `-get-everything-version`, `-create-file-list`. Not supported: `-instance`, `-timeout`, `-pause`, `-more`, colors and settings persistence.

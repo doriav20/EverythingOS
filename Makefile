@@ -13,7 +13,7 @@ help:
 	@echo "  fmt     format the workspace"
 	@echo "  shell   interactive shell in the dev container"
 	@echo "  e2e     every end-to-end suite, including real Samba and NFS servers"
-	@echo "  e2e-local  the search, read-only and desktop-client suites (no servers)"
+	@echo "  e2e-local  the search, read-only, network-server and desktop-client suites"
 	@echo "  ui-test    the desktop-client suite alone"
 	@echo "  package build .deb, .rpm, .pkg.tar.zst and .tar.gz packages into dist/"
 	@echo "  run     run the daemon (indexing this host) and a browser GUI in containers"
@@ -45,9 +45,9 @@ e2e:
 	$(COMPOSE) --profile test run --rm e2e
 	$(COMPOSE) --profile test down
 
-# The suites that need no servers.
+# The suites that need no Samba or NFS servers.
 e2e-local: image
-	$(DEV) bash tests/e2e/run.sh features readonly ui
+	$(DEV) bash tests/e2e/run.sh features readonly servers ui
 
 # The desktop client, driven through the accessibility bus on Xvfb.
 ui-test: image

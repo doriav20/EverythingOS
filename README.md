@@ -7,7 +7,8 @@ Instant file search for Linux, in the spirit of [Everything](https://www.voidtoo
 - **Network shares, done properly.** EverythingOS mounts SMB, NFS and SSHFS shares (and folders) for you, from the window or the command line, then keeps even huge shares fresh without re-crawling them: SMB change notifications, adaptive parallel scanning and per-folder hot/cold scheduling.
 - **Everything 1.5's search syntax**: operators, wildcards, every modifier and function from `ext:` and `size:` to `dupe:`, `content:`, `child:`, `width:` and `artist:`, with the same date and size forms. See [docs/everything-parity.md](docs/everything-parity.md).
 - **Every language.** Names in Hebrew, Arabic, Greek, Cyrillic, Japanese or with emoji are searched with Unicode case folding, and diacritics are ignored by default as in Everything: `שלום` finds `שָׁלוֹם`, `resume` finds `Résumé`.
-- **It only looks.** Indexing and searching never change a file — not even its access time.
+- **Other computers too.** Everything's ETP/FTP and HTTP servers, File → Connect to ETP Server (search Everything on a Windows PC from Linux, or EverythingOS from Everything), and remote indexes: live copies of other computers' indexes, searchable even while they are off. See [Other computers](#other-computers).
+- **It only looks.** Indexing and searching never change a file — not even its access time, and the servers are read-only.
 - **A desktop window** with Everything's columns, highlighting, preview, bookmarks and command line, and an `es`-compatible command-line tool.
 
 | Component  | Role                                                       |
@@ -67,7 +68,7 @@ Type to search; results update as you type and as files change, with the matched
 | Ctrl+N, Ctrl+W | new window, close window |
 | Ctrl+F / F3, F5, Esc | search box, refresh, clear the search (twice: close) |
 
-The main menu has every Search option (also match prefix/suffix and ignore punctuation/white space), the View options (preview, status bar, columns, sort), Recent Searches, Tools (statistics, rescan, save the index) and Preferences, where indexed volumes are listed and shares and folders are mounted. The right-click menu offers Open, Open With, Open Containing Folder, the copy commands and Properties. Results can be dragged into other applications. Settings, bookmarks and history are kept in `~/.config/evos/evos-gtk.ini`.
+The main menu has File (New Window, Connect to ETP Server, Export), every Search option (also match prefix/suffix and ignore punctuation/white space), the View options (preview, status bar, columns, sort), Recent Searches, Tools (statistics, rescan, save the index) and Preferences: indexed volumes, mounted shares and folders, remote indexes and the network servers. The right-click menu offers Open, Open With, Open Containing Folder, the copy commands and Properties. Results can be dragged into other applications. Settings, bookmarks and history are kept in `~/.config/evos/evos-gtk.ini`.
 
 Everything's command line works too, and is passed to the running window:
 
@@ -75,6 +76,7 @@ Everything's command line works too, and is passed to the running window:
 evos-gtk -s "*.pdf" -sort size-descending   # search, sorted by size
 evos-gtk -filter pictures -s holiday
 evos-gtk -bookmark "Big videos"
+evos-gtk -connect me@winpc                   # search another computer (ETP)
 evos-gtk -toggle-window                      # bind this to a hotkey
 evos-gtk -help                               # every option
 ```
@@ -95,6 +97,7 @@ evos --filelist music.efu queen              # search a file list offline
 evos --inc-run-count ~/notes.md; evos "runcount:>0"
 evos --json pic: holiday                     # JSON lines for scripts
 evos stats                                   # files, folders and sizes per volume
+evos --etp me:secret@winpc report            # search Everything on another computer
 ```
 
 `evos --help` lists every option: columns (`-name`, `-path-column`, `-size`, `-dc`, `-dm`, `-da`, `-attributes`, `-run-count`, ...), formats (`-csv`, `-tsv`, `-efu`, `-m3u8`, `-json`, `-export-*`), size and date formats, highlighting, `-get-result-count`, `-get-total-size`, `-save-db` and `-reindex`. It exits with 1 when nothing matched, like grep.
@@ -154,6 +157,33 @@ Measured by the end-to-end suite (`make e2e`, 100,000 files per share, container
 | Server becomes unreachable | offline after ~45 s, still searchable |
 | Daemon restart | searchable again after 0.3 s |
 
+## Other computers
+
+EverythingOS speaks Everything's network protocols, so Linux and Windows machines search each other:
+
+| Feature | What it does | Where |
+|---|---|---|
+| **ETP/FTP server** | Everything on other computers searches this index with *File → Connect to ETP Server*; FTP clients browse and download | Preferences → Servers, `evos server enable etp` |
+| **HTTP server** | search pages and downloads in any browser, and Everything's `/?search=…&json=1` interface for scripts | Preferences → Servers, `evos server enable http` |
+| **Connect to ETP Server** | a window (or `evos --etp`) searching Everything on Windows or another EverythingOS: sorting, preview, opening files (as read-only copies) and folders | File → Connect to ETP Server, `evos-gtk -connect` |
+| **Index server** | other EverythingOS computers keep a live copy of this index (port 14630, the Everything Server's) | Preferences → Servers, `evos server enable index` |
+| **Remote indexes** | copies of other computers' indexes under `/net/<name>`, searched with everything else and kept while the other computer is off; from an index server (only changes are sent, every few seconds) or from an ETP server such as Everything on Windows (copied again on a schedule) | Preferences → Remote Indexes, `evos remote add` |
+
+```bash
+# Let Everything on Windows search this computer (File > Connect to ETP Server):
+evos server enable etp --user me --password-stdin <<<"secret"
+# Share this index with other EverythingOS computers:
+evos server add-user laptop && evos server enable index
+# On the laptop: keep a live copy of it, or of Everything on a Windows PC:
+evos remote add desktop desktop.local --user laptop --ask-password
+evos remote add winpc winpc.local --etp --user me --ask-password
+evos remote list
+```
+
+Remote users get what one Linux account may see and read (`nobody` unless you choose another): folders it cannot enter stay hidden, not even their names leave the machine, and nothing can be uploaded, deleted, renamed or changed. Downloads can be turned off per server. Settings are kept root-only in `/etc/evos/servers.toml` with salted password hashes; changing them takes administrator rights. Like Everything's, the ETP/FTP and HTTP servers are not encrypted: keep them to trusted networks or tunnel them (SSH, VPN).
+
+Everything 1.5's own Everything Server protocol is not published, so the index server talks to other EverythingOS computers only; Windows machines are reached over ETP in both directions.
+
 ## Searching never changes your files
 
 EverythingOS only reads metadata and, when you ask for it, content:
@@ -183,17 +213,18 @@ Everything builds and runs in Docker, so it works from any host:
 | `make check` | rustfmt, clippy (`-D warnings`) and all unit and integration tests |
 | `make test`, `make build`, `make shell` | the usual |
 | `make e2e` | every end-to-end suite, including real Samba and nfs-ganesha servers (`E2E_FILES=1000000 make e2e` for a big share) |
-| `make e2e-local` | the suites that need no servers: search features, read-only guarantees and the desktop client |
+| `make e2e-local` | the suites that need no Samba or NFS servers: search features, read-only guarantees, the network servers and the desktop client |
 | `make ui-test` | the desktop client alone |
 | `make package`, `make deb`, `make rpm`, `make arch`, `make tarball` | packages into `dist/` |
 | `make run`, `make stop` | containerized daemon plus browser GUI |
 | `docker compose run --rm dev cargo bench -p evos-core` | search, sort and snapshot benchmarks |
 
-The end-to-end suites (`tests/e2e/run.sh [features] [readonly] [ui] [network]`):
+The end-to-end suites (`tests/e2e/run.sh [features] [readonly] [servers] [ui] [network]`):
 
 - **features** — the search syntax through the real daemon and CLI; names in Hebrew, Arabic, Greek, Japanese and emoji; content and media properties; run history; exports and file lists; live updates; per-user filtering.
 - **readonly** — nothing changes on a `strictatime` filesystem, not even access times.
-- **ui** — the real `evos-gtk` window on Xvfb, driven like a user (typing, Hebrew input, shortcuts, clicks, right-click menu, clipboard, scrolling 5,000 results, dialogs, mounting a folder from Preferences, surviving a daemon restart) and read through the accessibility bus, so it checks what is actually on screen.
+- **servers** — the ETP/FTP, HTTP and index servers used by clients that share no code with them (curl, Python's ftplib and an ETP client written from the protocol), refusing every change; remote indexes copied from them and followed live.
+- **ui** — the real `evos-gtk` window on Xvfb, driven like a user (typing, Hebrew input, shortcuts, clicks, right-click menu, clipboard, scrolling 5,000 results, dialogs, mounting a folder from Preferences, setting up the servers and a remote index in Preferences, connecting a window to an ETP server, surviving a daemon restart) and read through the accessibility bus, so it checks what is actually on screen.
 - **network** — SMB and NFS: scanning, change notifications, sweeps, latency, offline shares, restarts, names in other scripts and content over both, and an SMB share mounted with a login from the window's Preferences.
 
 Workspace layout:
@@ -203,6 +234,7 @@ crates/evos-core    index store, query language, parallel search, sorting, permi
 crates/evos-scan    mount discovery, walker, sweeps, fanotify/inotify, SMB notify, AIMD gate, scheduler, volume drivers
 crates/evos-mount   mount definitions, credentials, mount commands, supervision
 crates/evos-proto   socket protocol, client library, file list writer
+crates/evos-etp     Everything's ETP protocol and an ETP client
 crates/evosd        the daemon
 crates/evos-cli     `evos`
 crates/evos-gtk     `evos-gtk`
@@ -216,7 +248,8 @@ Benchmarks on 12 cores with 1M entries: substring search 5 ms, `*.ext` 3.5 ms, p
 
 - Linux 5.9+ is needed for fanotify filesystem watches (5.17+ for single-event renames); other filesystems fall back to inotify or sweeps.
 - POSIX ACLs are not considered when filtering results.
-- Not implemented from Everything: the HTTP and ETP servers, thumbnail view, the folder and filter sidebars, result omission, tabs, user-defined filters, and opening file lists in the window (the CLI searches them). See [docs/everything-parity.md](docs/everything-parity.md).
+- Everything Server's protocol is unpublished: remote indexes come from EverythingOS index servers or over ETP.
+- Not implemented from Everything: thumbnail view, the folder and filter sidebars, result omission, tabs, user-defined filters, and opening file lists in the window (the CLI searches them). See [docs/everything-parity.md](docs/everything-parity.md).
 - Wayland has no global hotkeys for applications; bind `evos-gtk -toggle-window` in your desktop's keyboard settings.
 
 ## License

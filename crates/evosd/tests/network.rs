@@ -227,6 +227,20 @@ fn etp_server_searches_and_downloads_read_only() {
     assert_eq!(cmd("PASS secret").0, 230);
     assert_eq!(cmd("SYST").0, 215);
     assert!(cmd("FEAT").1.contains("EVERYTHING"));
+    // Clients walk down one folder at a time, through folders above the
+    // indexed volume too.
+    let parent = fx.disk.parent().unwrap().to_str().unwrap().to_owned();
+    let first = parent
+        .trim_start_matches('/')
+        .split('/')
+        .next()
+        .unwrap()
+        .to_owned();
+    assert_eq!(cmd("CWD /").0, 250);
+    assert_eq!(cmd(&format!("CWD {first}")).0, 250);
+    assert_eq!(cmd(&format!("CWD {parent}")).0, 250);
+    assert_eq!(cmd("CWD disk").0, 250);
+    assert_eq!(cmd(&format!("CWD {parent}/no-such-folder")).0, 550);
     assert_eq!(cmd(&format!("CWD {}/docs", disk(&fx))).0, 250);
     assert!(cmd("PWD").1.contains("/docs"));
     assert_eq!(

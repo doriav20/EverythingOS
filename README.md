@@ -180,7 +180,7 @@ evos remote add winpc winpc.local --etp --user me --ask-password
 evos remote list
 ```
 
-Remote users get what one Linux account may see and read (`nobody` unless you choose another): folders it cannot enter stay hidden, not even their names leave the machine, and nothing can be uploaded, deleted, renamed or changed. Downloads can be turned off per server. Settings are kept root-only in `/etc/evos/servers.toml` with salted password hashes; changing them takes administrator rights. Like Everything's, the ETP/FTP and HTTP servers are not encrypted: keep them to trusted networks or tunnel them (SSH, VPN).
+Remote users get what one Linux account may see and read (`nobody` unless you choose another): folders it cannot enter stay hidden, not even their names leave the machine, and nothing can be uploaded, deleted, renamed or changed. Downloads can be turned off per server. On the receiving side, a remote index's copy is searchable by every user of that computer, as the account it logs in with allowed. Settings are kept root-only in `/etc/evos/servers.toml` with salted password hashes; changing them takes administrator rights. Like Everything's, the ETP/FTP and HTTP servers are not encrypted: keep them to trusted networks or tunnel them (SSH, VPN).
 
 Everything 1.5's own Everything Server protocol is not published, so the index server talks to other EverythingOS computers only; Windows machines are reached over ETP in both directions.
 
